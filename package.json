@@ -1,0 +1,91 @@
+{
+  "name": "vscode-code-analysis",
+  "displayName": "Code Analysis Graph",
+  "description": "Visualize code dependencies and relationships with interactive canvas graph",
+  "version": "0.1.0",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeAnalysis.analyzeFolder",
+        "title": "Code Analysis: Analyze Folder"
+      },
+      {
+        "command": "codeAnalysis.openGraph",
+        "title": "Code Analysis: Open Dependency Graph"
+      }
+    ],
+    "configuration": {
+      "title": "Code Analysis",
+      "properties": {
+        "codeAnalysis.excludePatterns": {
+          "type": "array",
+          "default": [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/.git/**"
+          ],
+          "description": "Patterns to exclude from analysis"
+        },
+        "codeAnalysis.maxDepth": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum depth for file traversal"
+        },
+        "codeAnalysis.theme": {
+          "type": "string",
+          "enum": [
+            "light",
+            "dark",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Graph theme"
+        },
+        "codeAnalysis.layout": {
+          "type": "string",
+          "enum": [
+            "dagre",
+            "force",
+            "circular"
+          ],
+          "default": "dagre",
+          "description": "Default graph layout algorithm"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run build",
+    "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node24",
+    "watch": "pnpm run build -- --watch",
+    "lint": "eslint src --ext ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "test": "node ./dist/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.95.0",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "@vscode/test-electron": "^2.4.1",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "jointjs": "^3.7.7",
+    "dagre": "^0.8.5"
+  },
+  "packageManager": "pnpm@10.28.0"
+}
