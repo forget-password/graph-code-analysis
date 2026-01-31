@@ -10,12 +10,14 @@ export class GraphViewPanel {
 
     private readonly panel: vscode.WebviewPanel;
     private readonly extensionUri: vscode.Uri;
+    private readonly context: vscode.ExtensionContext;
     private disposables: vscode.Disposable[] = [];
     private graphData: GraphData | undefined;
 
-    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
         this.panel = panel;
         this.extensionUri = extensionUri;
+        this.context = context;
 
         // 设置 webview 内容
         this.update();
@@ -60,7 +62,7 @@ export class GraphViewPanel {
             }
         );
 
-        GraphViewPanel.currentPanel = new GraphViewPanel(panel, context.extensionUri);
+        GraphViewPanel.currentPanel = new GraphViewPanel(panel, context.extensionUri, context);
         if (graphData) {
             GraphViewPanel.currentPanel.updateGraphData(graphData);
         }
@@ -70,19 +72,23 @@ export class GraphViewPanel {
      * 更新图数据
      */
     public updateGraphData(graphData: GraphData): void {
+        console.log('GraphViewPanel.updateGraphData called with:', graphData);
         this.graphData = graphData;
         this.panel.webview.postMessage({
             type: 'updateGraph',
             data: graphData,
         });
+        console.log('Posted updateGraph message to webview');
     }
 
     /**
      * 处理来自 webview 的消息
      */
     private async handleMessage(message: any): Promise<void> {
+        console.log(`[GraphViewPanel] Received message: ${message.type}`, message.data);
         switch (message.type) {
             case 'nodeClicked':
+                console.log('[GraphViewPanel] Handling nodeClicked...');
                 await this.handleNodeClick(message.data);
                 break;
             case 'elementClicked':
@@ -138,9 +144,43 @@ export class GraphViewPanel {
     /**
      * 处理保存布局
      */
-    private handleSaveLayout(data: any): void {
-        // TODO: 保存布局到工作区状态
-        console.log('Saving layout:', data);
+    private async handleSaveLayout(data: any): Promise<void> {
+        if (!this.context) {
+            console.warn('No context available for saving layout');
+            return;
+        }
+
+        try {
+            // 保存布局数据到工作区状态
+            await this.context.workspaceState.update('graphLayout', {
+                nodes: data.nodes,
+                scale: data.scale,
+                center: data.center,
+                timestamp: Date.now()
+            });
+
+            vscode.window.showInformationMessage('Graph layout saved');
+        } catch (error) {
+            vscode.window.showErrorMessage('Failed to save graph layout');
+            console.error('Error saving layout:', error);
+        }
+    }
+
+    /**
+     * 加载保存的布局
+     */
+    private async loadSavedLayout(): Promise<any | undefined> {
+        if (!this.context) {
+            return undefined;
+        }
+
+        try {
+            const layout = this.context.workspaceState.get('graphLayout');
+            return layout;
+        } catch (error) {
+            console.error('Error loading layout:', error);
+            return undefined;
+        }
     }
 
     /**
@@ -162,6 +202,12 @@ export class GraphViewPanel {
         );
         const graphRendererUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'media', 'graph-renderer.js')
+        );
+        const searchFilterUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'media', 'search-filter.js')
+        );
+        const contextMenuUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'media', 'context-menu.js')
         );
 
         // 生成 nonce 用于 CSP
@@ -208,14 +254,19 @@ export class GraphViewPanel {
     <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
     <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/backbone.js/1.4.1/backbone-min.js"></script>
     <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/jointjs/3.7.7/joint.min.js"></script>
+    <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/graphlib/2.1.8/graphlib.min.js"></script>
     <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
     
     <!-- Load custom graph renderer -->
     <script nonce="${nonce}" src="${graphRendererUri}"></script>
+    <script nonce="${nonce}" src="${searchFilterUri}"></script>
+    <script nonce="${nonce}" src="${contextMenuUri}"></script>
 
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         let graphRenderer = null;
+        let searchFilter = null;
+        let contextMenu = null;
         let graphData = null;
 
         // 初始化
@@ -229,8 +280,17 @@ export class GraphViewPanel {
             // 创建图形渲染器
             graphRenderer = new GraphRenderer('graph-container');
             
+            // 创建搜索过滤器
+            searchFilter = new SearchFilter(graphRenderer);
+            
+            // 创建右键菜单
+            contextMenu = new ContextMenu(graphRenderer);
+            
             // 隐藏加载提示
-            document.getElementById('loading').style.display = 'none';
+            const loadingEl = document.getElementById('loading');
+            if (loadingEl) {
+                loadingEl.style.display = 'none';
+            }
 
             // 绑定工具栏事件
             setupToolbar();

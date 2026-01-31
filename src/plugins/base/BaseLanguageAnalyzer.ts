@@ -74,16 +74,33 @@ export abstract class BaseLanguageAnalyzer implements ILanguageAnalyzer {
     protected async getDocumentSymbols(
         document: vscode.TextDocument
     ): Promise<vscode.DocumentSymbol[]> {
-        try {
-            const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-                'vscode.executeDocumentSymbolProvider',
-                document.uri
-            );
-            return symbols || [];
-        } catch (error) {
-            console.error('Error getting document symbols:', error);
-            return [];
+        const maxRetries = 3;
+
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                    'vscode.executeDocumentSymbolProvider',
+                    document.uri
+                );
+
+                if (symbols && symbols.length > 0) {
+                    return symbols;
+                }
+
+                // 如果结果为空，等待后重试（除最后一次尝试外）
+                if (i < maxRetries - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            } catch (error) {
+                console.error(`Error getting document symbols (attempt ${i + 1}):`, error);
+
+                if (i < maxRetries - 1) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
         }
+
+        return [];
     }
 
     /**

@@ -16,6 +16,14 @@ body {
   width: 100vw;
   height: 100vh;
   position: relative;
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+#graph-container svg {
+  width: 100%;
+  height: 100%;
 }
 
 /* Toolbar */
@@ -75,8 +83,13 @@ button:active {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 /* JointJS Paper */
@@ -147,4 +160,209 @@ button:active {
 #info-panel .stat-label {
   font-weight: bold;
   color: var(--vscode-foreground);
+}
+
+/* Search Container */
+#search-container {
+  position: absolute;
+  top: 10px;
+  right: 200px;
+  z-index: 1000;
+  display: flex;
+  gap: 5px;
+  background: var(--vscode-sideBar-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+#search-input {
+  width: 250px;
+  padding: 6px 12px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--vscode-font-family);
+  outline: none;
+}
+
+#search-input:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+#search-input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+#clear-search {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: none;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 14px;
+}
+
+#clear-search:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+/* Search Stats */
+#search-stats {
+  position: absolute;
+  top: 50px;
+  right: 200px;
+  z-index: 1000;
+  background: var(--vscode-sideBar-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  display: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Filter Panel */
+#filter-panel {
+  position: absolute;
+  top: 90px;
+  right: 200px;
+  z-index: 1000;
+  background: var(--vscode-sideBar-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  min-width: 300px;
+  transition: max-height 0.3s ease;
+}
+
+#filter-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: bold;
+  color: var(--vscode-foreground);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+#filter-toggle:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+#toggle-filter {
+  background: transparent;
+  border: none;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+#filter-content {
+  padding: 12px;
+  display: block;
+}
+
+#filter-panel.collapsed #filter-content {
+  display: none;
+}
+
+.filter-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.filter-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  transition: background 0.2s;
+}
+
+.filter-label:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.filter-label input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.filter-actions button {
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+/* Context Menu */
+.context-menu {
+  position: fixed;
+  background: var(--vscode-menu-background);
+  border: 1px solid var(--vscode-menu-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10000;
+  min-width: 200px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.context-menu.hidden {
+  display: none;
+}
+
+.menu-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--vscode-menu-foreground);
+  transition: background 0.2s;
+}
+
+.menu-item:hover {
+  background: var(--vscode-menu-selectionBackground);
+  color: var(--vscode-menu-selectionForeground);
+}
+
+.menu-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.menu-label {
+  flex: 1;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--vscode-menu-separatorBackground);
+  margin: 4px 0;
 }

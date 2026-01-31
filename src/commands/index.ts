@@ -35,6 +35,10 @@ export async function analyzeFolderCommand(context: vscode.ExtensionContext): Pr
                 progress.report({ increment: percent, message });
             });
 
+            console.log('Analysis complete, graph data:', graphData);
+            console.log('Nodes:', graphData.nodes.length);
+            console.log('Edges:', graphData.edges.length);
+
             // 打开图形视图
             GraphViewPanel.createOrShow(context, graphData);
 
