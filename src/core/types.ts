@@ -124,6 +124,8 @@ export interface GraphEdge {
     vertices?: Array<{ x: number; y: number }>;
 }
 
+export type GraphLayoutAlgorithm = 'dagre' | 'force' | 'circular' | 'radial';
+
 /**
  * 图数据
  */
@@ -134,7 +136,7 @@ export interface GraphData {
     edges: GraphEdge[];
     /** 布局信息 */
     layout?: {
-        algorithm: 'dagre' | 'force' | 'circular';
+        algorithm: GraphLayoutAlgorithm;
         direction?: 'TB' | 'BT' | 'LR' | 'RL';
     };
 }

@@ -56,9 +56,10 @@
           "enum": [
             "dagre",
             "force",
-            "circular"
+            "circular",
+            "radial"
           ],
-          "default": "dagre",
+          "default": "radial",
           "description": "Default graph layout algorithm"
         }
       }

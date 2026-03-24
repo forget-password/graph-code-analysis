@@ -2,7 +2,14 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { PluginManager } from '../PluginManager';
-import { FileAnalysisResult, GraphData, GraphNode, GraphEdge, DependencyType } from '../types';
+import {
+    FileAnalysisResult,
+    GraphData,
+    GraphNode,
+    GraphEdge,
+    DependencyType,
+    GraphLayoutAlgorithm,
+} from '../types';
 
 /**
  * 代码分析器
@@ -26,6 +33,7 @@ export class CodeAnalyzer {
         const config = vscode.workspace.getConfiguration('codeAnalysis');
         const excludePatterns = config.get<string[]>('excludePatterns', []);
         const maxDepth = config.get<number>('maxDepth', 10);
+        const layoutAlgorithm = config.get<GraphLayoutAlgorithm>('layout', 'radial');
 
         // 获取所有支持的文件
         const files = await this.findFiles(folderPath, excludePatterns, maxDepth);
@@ -49,7 +57,7 @@ export class CodeAnalyzer {
         progressCallback?.(100, 'Building dependency graph...');
 
         // 构建图数据
-        const graphData = this.buildGraphData(results);
+        const graphData = this.buildGraphData(results, layoutAlgorithm);
         return graphData;
     }
 
@@ -166,7 +174,10 @@ export class CodeAnalyzer {
     /**
      * 构建图数据
      */
-    private buildGraphData(results: FileAnalysisResult[]): GraphData {
+    private buildGraphData(
+        results: FileAnalysisResult[],
+        layoutAlgorithm: GraphLayoutAlgorithm
+    ): GraphData {
         const nodes: GraphNode[] = [];
         const edges: GraphEdge[] = [];
 
@@ -202,7 +213,7 @@ export class CodeAnalyzer {
             nodes,
             edges,
             layout: {
-                algorithm: 'dagre',
+                algorithm: layoutAlgorithm,
                 direction: 'TB',
             },
         };

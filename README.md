@@ -44,7 +44,7 @@ Configure the extension in your VSCode settings:
   ],
   "codeAnalysis.maxDepth": 10,
   "codeAnalysis.theme": "auto",
-  "codeAnalysis.layout": "dagre"
+  "codeAnalysis.layout": "radial"
 }
 ```
 
@@ -53,7 +53,7 @@ Configure the extension in your VSCode settings:
 - `codeAnalysis.excludePatterns`: Patterns to exclude from analysis
 - `codeAnalysis.maxDepth`: Maximum depth for file traversal
 - `codeAnalysis.theme`: Graph theme (`light`, `dark`, or `auto`)
-- `codeAnalysis.layout`: Default graph layout algorithm (`dagre`, `force`, or `circular`)
+- `codeAnalysis.layout`: Default graph layout algorithm (`radial`, `dagre`, `force`, or `circular`)
 
 ## 🎯 Roadmap
 

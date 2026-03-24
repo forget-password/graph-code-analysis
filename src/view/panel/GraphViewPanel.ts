@@ -242,6 +242,10 @@ export class GraphViewPanel {
         <div class="stat"><span class="stat-label">Zoom:</span> <span id="zoom-level">100%</span></div>
     </div>
 
+    <div id="minimap-panel">
+        <div id="minimap"></div>
+    </div>
+
     <div id="graph-container">
         <div id="loading">
             <div class="spinner"></div>
