@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as os from 'os';
 import { PluginManager } from '../PluginManager';
 import {
     FileAnalysisResult,
@@ -18,6 +19,7 @@ import {
 export class CodeAnalyzer {
     private pluginManager: PluginManager;
     private analysisCache: Map<string, FileAnalysisResult> = new Map();
+    private readonly defaultConcurrency = Math.max(4, Math.min(os.cpus().length || 4, 12));
 
     constructor() {
         this.pluginManager = PluginManager.getInstance();
@@ -34,25 +36,21 @@ export class CodeAnalyzer {
         const excludePatterns = config.get<string[]>('excludePatterns', []);
         const maxDepth = config.get<number>('maxDepth', 10);
         const layoutAlgorithm = config.get<GraphLayoutAlgorithm>('layout', 'radial');
+        const analysisConcurrency = Math.max(
+            1,
+            config.get<number>('analysisConcurrency', this.defaultConcurrency)
+        );
 
         // 获取所有支持的文件
         const files = await this.findFiles(folderPath, excludePatterns, maxDepth);
         console.log(`Found ${files.length} files to analyze`);
 
-        // 分析所有文件
-        const results: FileAnalysisResult[] = [];
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            progressCallback?.(
-                (i / files.length) * 100,
-                `Analyzing ${path.basename(file)} (${i + 1}/${files.length})`
-            );
-
-            const result = await this.analyzeFile(file);
-            if (result) {
-                results.push(result);
-            }
-        }
+        // 并发分析所有文件
+        const results = await this.analyzeFiles(
+            files,
+            analysisConcurrency,
+            progressCallback
+        );
 
         progressCallback?.(100, 'Building dependency graph...');
 
@@ -79,11 +77,11 @@ export class CodeAnalyzer {
         }
 
         try {
-            // 打开文档
-            const document = await vscode.workspace.openTextDocument(filePath);
+            // 直接读取文本，避免为大批量文件创建 VS Code 文档实例
+            const content = await fs.readFile(filePath, 'utf8');
 
             // 分析文件
-            const result = await analyzer.analyzeFile(filePath, document);
+            const result = await analyzer.analyzeFile(filePath, content);
 
             // 缓存结果
             this.analysisCache.set(filePath, result);
@@ -105,14 +103,19 @@ export class CodeAnalyzer {
     ): Promise<string[]> {
         const files: string[] = [];
         const supportedExtensions = this.pluginManager.getSupportedExtensions();
+        const excludeMatchers = excludePatterns.map((pattern) => this.createExcludeRegex(pattern));
 
-        await this.traverseDirectory(folderPath, folderPath, files, excludePatterns, maxDepth, 0);
+        await this.traverseDirectory(
+            folderPath,
+            folderPath,
+            files,
+            excludeMatchers,
+            supportedExtensions,
+            maxDepth,
+            0
+        );
 
-        // 过滤支持的文件
-        return files.filter((file) => {
-            const ext = path.extname(file).toLowerCase();
-            return supportedExtensions.includes(ext);
-        });
+        return files;
     }
 
     /**
@@ -122,7 +125,8 @@ export class CodeAnalyzer {
         rootPath: string,
         currentPath: string,
         files: string[],
-        excludePatterns: string[],
+        excludeMatchers: RegExp[],
+        supportedExtensions: string[],
         maxDepth: number,
         currentDepth: number
     ): Promise<void> {
@@ -138,7 +142,7 @@ export class CodeAnalyzer {
                 const relativePath = path.relative(rootPath, fullPath);
 
                 // 检查是否应该排除
-                if (this.shouldExclude(relativePath, excludePatterns)) {
+                if (this.shouldExclude(relativePath, excludeMatchers)) {
                     continue;
                 }
 
@@ -147,12 +151,16 @@ export class CodeAnalyzer {
                         rootPath,
                         fullPath,
                         files,
-                        excludePatterns,
+                        excludeMatchers,
+                        supportedExtensions,
                         maxDepth,
                         currentDepth + 1
                     );
                 } else if (entry.isFile()) {
-                    files.push(fullPath);
+                    const ext = path.extname(fullPath).toLowerCase();
+                    if (supportedExtensions.includes(ext)) {
+                        files.push(fullPath);
+                    }
                 }
             }
         } catch (error) {
@@ -163,12 +171,50 @@ export class CodeAnalyzer {
     /**
      * 检查是否应该排除
      */
-    private shouldExclude(relativePath: string, patterns: string[]): boolean {
-        return patterns.some((pattern) => {
-            // 简单的通配符匹配
-            const regex = new RegExp(pattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*'));
-            return regex.test(relativePath);
-        });
+    private shouldExclude(relativePath: string, matchers: RegExp[]): boolean {
+        return matchers.some((matcher) => matcher.test(relativePath));
+    }
+
+    private createExcludeRegex(pattern: string): RegExp {
+        return new RegExp(pattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*'));
+    }
+
+    private async analyzeFiles(
+        files: string[],
+        concurrency: number,
+        progressCallback?: (progress: number, message: string) => void
+    ): Promise<FileAnalysisResult[]> {
+        const safeConcurrency = Math.max(1, Math.min(concurrency, files.length || 1));
+        const results: Array<FileAnalysisResult | null> = new Array(files.length).fill(null);
+        let nextIndex = 0;
+        let completed = 0;
+
+        const worker = async () => {
+            while (true) {
+                const currentIndex = nextIndex;
+                nextIndex += 1;
+
+                if (currentIndex >= files.length) {
+                    return;
+                }
+
+                const file = files[currentIndex];
+                const result = await this.analyzeFile(file);
+                results[currentIndex] = result;
+
+                completed += 1;
+                progressCallback?.(
+                    (completed / Math.max(files.length, 1)) * 100,
+                    `Analyzing ${path.basename(file)} (${completed}/${files.length})`
+                );
+            }
+        };
+
+        await Promise.all(
+            Array.from({ length: safeConcurrency }, () => worker())
+        );
+
+        return results.filter((result): result is FileAnalysisResult => result !== null);
     }
 
     /**
@@ -180,6 +226,7 @@ export class CodeAnalyzer {
     ): GraphData {
         const nodes: GraphNode[] = [];
         const edges: GraphEdge[] = [];
+        const seenEdges = new Set<string>();
 
         // 创建节点
         for (const result of results) {
@@ -196,6 +243,12 @@ export class CodeAnalyzer {
         // 创建边（基于导入关系）
         for (const result of results) {
             for (const importDep of result.imports) {
+                const edgeKey = `${importDep.from.filePath}->${importDep.to.filePath}:${importDep.type}`;
+                if (seenEdges.has(edgeKey)) {
+                    continue;
+                }
+
+                seenEdges.add(edgeKey);
                 edges.push({
                     id: importDep.id,
                     source: {

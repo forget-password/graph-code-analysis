@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs/promises';
 import * as ts from 'typescript';
 import { BaseLanguageAnalyzer } from '../base/BaseLanguageAnalyzer';
 import {
@@ -17,67 +18,22 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
     readonly id = 'typescript';
     readonly name = 'TypeScript/JavaScript Analyzer';
     readonly supportedExtensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    private readonly resolvedImportCache: Map<string, string | null> = new Map();
+    private readonly fileExistsCache: Map<string, boolean> = new Map();
 
     async analyzeFile(
         filePath: string,
-        document: vscode.TextDocument
+        content: string
     ): Promise<FileAnalysisResult> {
-        const symbols = await this.getDocumentSymbols(document);
-        const elements: CodeElement[] = [];
-        const imports: Dependency[] = [];
-        const exports: CodeElement[] = [];
-
-        console.log(`[TypeScriptAnalyzer] Analyzing file: ${filePath}`);
-        console.log(`[TypeScriptAnalyzer] Initial VSCode symbols count: ${symbols.length}`);
-
-        // 转换符号为代码元素
-        if (symbols.length > 0) {
-            for (const symbol of symbols) {
-                const element = this.convertSymbolToElement(symbol, filePath);
-
-                // 检查是否为导出
-                if (this.isExported(symbol, document)) {
-                    element.isExported = true;
-                    exports.push(element);
-                } else {
-                    element.isExported = false;
-                }
-
-                elements.push(element);
-
-                // 递归处理子符号
-                if (symbol.children) {
-                    this.processChildren(symbol.children, filePath, elements);
-                }
-            }
-        } else {
-            // 如果 VSCode API 没有返回符号，尝试使用 TypeScript 编译器 API 解析
-            console.log('[TypeScriptAnalyzer] No symbols returned by VSCode API, trying TypeScript Compiler API fallback...');
-            const documentText = document.getText();
-            console.log(`[TypeScriptAnalyzer] Document text length: ${documentText.length}`);
-
-            const fallbackElements = this.parseWithTypeScript(filePath, documentText);
-            console.log(`[TypeScriptAnalyzer] Fallback elements found: ${fallbackElements.length}`);
-
-            const flatten = (items: CodeElement[], depth: number = 0) => {
-                for (const item of items) {
-                    console.log(`[TypeScriptAnalyzer] Flattening item (depth ${depth}): ${item.name} (${item.kind})`);
-                    elements.push(item);
-                    if (item.isExported) {
-                        exports.push(item);
-                    }
-                    if (item.children && item.children.length > 0) {
-                        console.log(`[TypeScriptAnalyzer] item ${item.name} has ${item.children.length} children, recursing...`);
-                        flatten(item.children, depth + 1);
-                    }
-                }
-            };
-            flatten(fallbackElements);
-        }
-
-        // 分析导入语句
-        const importDeps = await this.analyzeImports(document, filePath);
-        imports.push(...importDeps);
+        const sourceFile = ts.createSourceFile(
+            filePath,
+            content,
+            ts.ScriptTarget.Latest,
+            true
+        );
+        const elements = this.parseWithTypeScript(filePath, content, sourceFile);
+        const imports = await this.analyzeImports(sourceFile, filePath);
+        const exports = elements.filter((element) => element.isExported);
 
         return {
             filePath,
@@ -166,72 +122,55 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
      * 分析导入语句
      */
     private async analyzeImports(
-        document: vscode.TextDocument,
+        sourceFile: ts.SourceFile,
         filePath: string
     ): Promise<Dependency[]> {
         const imports: Dependency[] = [];
-        const text = document.getText();
+        const seenImports = new Set<string>();
 
-        // 匹配 import 语句的正则表达式
-        const importRegex = /import\s+(?:{([^}]+)}|(\*\s+as\s+\w+)|(\w+))\s+from\s+['"]([^'"]+)['"]/g;
-        const requireRegex = /(?:const|let|var)\s+(?:{([^}]+)}|(\w+))\s*=\s*require\(['"]([^'"]+)['"]\)/g;
-
-        let match;
-
-        // 解析 ES6 import
-        while ((match = importRegex.exec(text)) !== null) {
-            const importPath = match[4];
-            const resolvedPath = await this.resolveImportPath(importPath, filePath);
-
-            if (resolvedPath) {
-                imports.push({
-                    id: `${filePath}->${resolvedPath}`,
-                    from: {
-                        id: filePath,
-                        name: path.basename(filePath),
-                        kind: CodeElementKind.File,
-                        range: new vscode.Range(0, 0, 0, 0),
-                        filePath,
-                    },
-                    to: {
-                        id: resolvedPath,
-                        name: path.basename(resolvedPath),
-                        kind: CodeElementKind.File,
-                        range: new vscode.Range(0, 0, 0, 0),
-                        filePath: resolvedPath,
-                    },
-                    type: DependencyType.Import,
-                });
+        const addImport = async (importPath: string | undefined) => {
+            if (!importPath || seenImports.has(importPath)) {
+                return;
             }
-        }
 
-        // 解析 CommonJS require
-        while ((match = requireRegex.exec(text)) !== null) {
-            const importPath = match[3];
+            seenImports.add(importPath);
             const resolvedPath = await this.resolveImportPath(importPath, filePath);
-
             if (resolvedPath) {
-                imports.push({
-                    id: `${filePath}->${resolvedPath}`,
-                    from: {
-                        id: filePath,
-                        name: path.basename(filePath),
-                        kind: CodeElementKind.File,
-                        range: new vscode.Range(0, 0, 0, 0),
-                        filePath,
-                    },
-                    to: {
-                        id: resolvedPath,
-                        name: path.basename(resolvedPath),
-                        kind: CodeElementKind.File,
-                        range: new vscode.Range(0, 0, 0, 0),
-                        filePath: resolvedPath,
-                    },
-                    type: DependencyType.Import,
-                });
+                imports.push(this.createImportDependency(filePath, resolvedPath));
             }
-        }
+        };
 
+        const pendingImports: Promise<void>[] = [];
+
+        sourceFile.forEachChild((node) => {
+            if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+                const moduleSpecifier = node.moduleSpecifier;
+                if (moduleSpecifier && ts.isStringLiteralLike(moduleSpecifier)) {
+                    pendingImports.push(addImport(moduleSpecifier.text));
+                }
+                return;
+            }
+
+            if (!ts.isVariableStatement(node)) {
+                return;
+            }
+
+            node.declarationList.declarations.forEach((declaration) => {
+                const initializer = declaration.initializer;
+                if (
+                    initializer
+                    && ts.isCallExpression(initializer)
+                    && ts.isIdentifier(initializer.expression)
+                    && initializer.expression.text === 'require'
+                    && initializer.arguments.length > 0
+                    && ts.isStringLiteralLike(initializer.arguments[0])
+                ) {
+                    pendingImports.push(addImport(initializer.arguments[0].text));
+                }
+            });
+        });
+
+        await Promise.all(pendingImports);
         return imports;
     }
 
@@ -244,42 +183,81 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
             return null;
         }
 
+        const cacheKey = `${currentFile}::${importPath}`;
+        if (this.resolvedImportCache.has(cacheKey)) {
+            return this.resolvedImportCache.get(cacheKey) ?? null;
+        }
+
         const currentDir = path.dirname(currentFile);
-        let resolvedPath = path.resolve(currentDir, importPath);
+        const resolvedPath = path.resolve(currentDir, importPath);
+        const candidates: string[] = [];
+        const resolvedExt = path.extname(resolvedPath).toLowerCase();
 
-        // 尝试添加扩展名
-        const extensions = this.supportedExtensions;
-        for (const ext of extensions) {
-            const pathWithExt = resolvedPath + ext;
-            try {
-                const uri = vscode.Uri.file(pathWithExt);
-                await vscode.workspace.fs.stat(uri);
-                return pathWithExt;
-            } catch {
-                // 文件不存在，继续尝试
+        if (this.supportedExtensions.includes(resolvedExt)) {
+            candidates.push(resolvedPath);
+        }
+
+        this.supportedExtensions.forEach((ext) => {
+            candidates.push(`${resolvedPath}${ext}`);
+            candidates.push(path.join(resolvedPath, `index${ext}`));
+        });
+
+        for (const candidate of candidates) {
+            if (await this.fileExists(candidate)) {
+                this.resolvedImportCache.set(cacheKey, candidate);
+                return candidate;
             }
         }
 
-        // 尝试 index 文件
-        for (const ext of extensions) {
-            const indexPath = path.join(resolvedPath, `index${ext}`);
-            try {
-                const uri = vscode.Uri.file(indexPath);
-                await vscode.workspace.fs.stat(uri);
-                return indexPath;
-            } catch {
-                // 文件不存在，继续尝试
-            }
-        }
-
+        this.resolvedImportCache.set(cacheKey, null);
         return null;
+    }
+
+    private createImportDependency(filePath: string, resolvedPath: string): Dependency {
+        return {
+            id: `${filePath}->${resolvedPath}`,
+            from: {
+                id: filePath,
+                name: path.basename(filePath),
+                kind: CodeElementKind.File,
+                range: new vscode.Range(0, 0, 0, 0),
+                filePath,
+            },
+            to: {
+                id: resolvedPath,
+                name: path.basename(resolvedPath),
+                kind: CodeElementKind.File,
+                range: new vscode.Range(0, 0, 0, 0),
+                filePath: resolvedPath,
+            },
+            type: DependencyType.Import,
+        };
+    }
+
+    private async fileExists(filePath: string): Promise<boolean> {
+        if (this.fileExistsCache.has(filePath)) {
+            return this.fileExistsCache.get(filePath) ?? false;
+        }
+
+        try {
+            await fs.access(filePath);
+            this.fileExistsCache.set(filePath, true);
+            return true;
+        } catch {
+            this.fileExistsCache.set(filePath, false);
+            return false;
+        }
     }
     /**
      * 使用 TypeScript 编译器 API 解析文件
      */
-    private parseWithTypeScript(filePath: string, content: string): CodeElement[] {
+    private parseWithTypeScript(
+        filePath: string,
+        content: string,
+        existingSourceFile?: ts.SourceFile
+    ): CodeElement[] {
         const elements: CodeElement[] = [];
-        const sourceFile = ts.createSourceFile(
+        const sourceFile = existingSourceFile || ts.createSourceFile(
             filePath,
             content,
             ts.ScriptTarget.Latest,

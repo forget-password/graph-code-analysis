@@ -41,6 +41,12 @@
           "default": 10,
           "description": "Maximum depth for file traversal"
         },
+        "codeAnalysis.analysisConcurrency": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "description": "Number of files analyzed in parallel"
+        },
         "codeAnalysis.theme": {
           "type": "string",
           "enum": [

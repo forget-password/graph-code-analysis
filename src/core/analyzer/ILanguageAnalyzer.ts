@@ -24,10 +24,10 @@ export interface ILanguageAnalyzer {
     /**
      * 分析文件
      * @param filePath 文件路径
-     * @param document VSCode 文档对象
+     * @param content 文件文本内容
      * @returns 文件分析结果
      */
-    analyzeFile(filePath: string, document: vscode.TextDocument): Promise<FileAnalysisResult>;
+    analyzeFile(filePath: string, content: string): Promise<FileAnalysisResult>;
 
     /**
      * 查找引用关系

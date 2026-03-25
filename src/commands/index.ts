@@ -29,10 +29,16 @@ export async function analyzeFolderCommand(context: vscode.ExtensionContext): Pr
         },
         async (progress) => {
             const analyzer = new CodeAnalyzer();
+            let lastProgress = 0;
 
             // 分析文件夹
             const graphData = await analyzer.analyzeFolder(folderPath, (percent, message) => {
-                progress.report({ increment: percent, message });
+                const nextProgress = Math.max(0, Math.min(percent, 100));
+                progress.report({
+                    increment: Math.max(0, nextProgress - lastProgress),
+                    message
+                });
+                lastProgress = nextProgress;
             });
 
             console.log('Analysis complete, graph data:', graphData);

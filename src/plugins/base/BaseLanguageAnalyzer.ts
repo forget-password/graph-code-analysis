@@ -25,7 +25,7 @@ export abstract class BaseLanguageAnalyzer implements ILanguageAnalyzer {
      */
     abstract analyzeFile(
         filePath: string,
-        document: vscode.TextDocument
+        content: string
     ): Promise<FileAnalysisResult>;
 
     /**
