@@ -198,16 +198,10 @@ export class GraphViewPanel {
 
         // 获取资源 URI
         const stylesUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, 'media', 'styles.css')
+            vscode.Uri.joinPath(this.extensionUri, 'media', 'graph-app.css')
         );
-        const graphRendererUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, 'media', 'graph-renderer.js')
-        );
-        const searchFilterUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, 'media', 'search-filter.js')
-        );
-        const contextMenuUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, 'media', 'context-menu.js')
+        const graphAppUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'media', 'graph-app.js')
         );
 
         // 生成 nonce 用于 CSP
@@ -221,7 +215,7 @@ export class GraphViewPanel {
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'none';
       style-src ${webview.cspSource} 'unsafe-inline';
-      script-src 'nonce-${nonce}' https://cdnjs.cloudflare.com;
+      script-src 'nonce-${nonce}' ${webview.cspSource};
       img-src ${webview.cspSource} data:;
       font-src ${webview.cspSource};
     ">
@@ -229,155 +223,8 @@ export class GraphViewPanel {
     <link rel="stylesheet" href="${stylesUri}">
 </head>
 <body>
-    <div id="toolbar">
-        <button id="fit-btn" title="Fit to View">🔍 Fit</button>
-        <button id="reset-zoom-btn" title="Reset Zoom">↺ Reset Zoom</button>
-        <button id="relayout-btn" title="Re-layout Graph">📐 Layout</button>
-        <button id="export-btn" title="Export as PNG">💾 Export</button>
-    </div>
-    
-    <div id="info-panel">
-        <div class="stat"><span class="stat-label">Nodes:</span> <span id="node-count">0</span></div>
-        <div class="stat"><span class="stat-label">Edges:</span> <span id="edge-count">0</span></div>
-        <div class="stat"><span class="stat-label">Zoom:</span> <span id="zoom-level">100%</span></div>
-    </div>
-
-    <div id="minimap-panel">
-        <div id="minimap"></div>
-    </div>
-
-    <div id="graph-container">
-        <div id="loading">
-            <div class="spinner"></div>
-            <div>Loading graph...</div>
-        </div>
-    </div>
-
-    <!-- Load JointJS and dependencies from CDN -->
-    <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
-    <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
-    <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/backbone.js/1.4.1/backbone-min.js"></script>
-    <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/jointjs/3.7.7/joint.min.js"></script>
-    <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/graphlib/2.1.8/graphlib.min.js"></script>
-    <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
-    
-    <!-- Load custom graph renderer -->
-    <script nonce="${nonce}" src="${graphRendererUri}"></script>
-    <script nonce="${nonce}" src="${searchFilterUri}"></script>
-    <script nonce="${nonce}" src="${contextMenuUri}"></script>
-
-    <script nonce="${nonce}">
-        const vscode = acquireVsCodeApi();
-        let graphRenderer = null;
-        let searchFilter = null;
-        let contextMenu = null;
-        let graphData = null;
-
-        // 初始化
-        function init() {
-            // 等待 JointJS 加载完成
-            if (typeof joint === 'undefined') {
-                setTimeout(init, 100);
-                return;
-            }
-
-            // 创建图形渲染器
-            graphRenderer = new GraphRenderer('graph-container');
-            
-            // 创建搜索过滤器
-            searchFilter = new SearchFilter(graphRenderer);
-            
-            // 创建右键菜单
-            contextMenu = new ContextMenu(graphRenderer);
-            
-            // 隐藏加载提示
-            const loadingEl = document.getElementById('loading');
-            if (loadingEl) {
-                loadingEl.style.display = 'none';
-            }
-
-            // 绑定工具栏事件
-            setupToolbar();
-
-            // 通知扩展已准备好
-            vscode.postMessage({ type: 'ready' });
-        }
-
-        // 设置工具栏
-        function setupToolbar() {
-            document.getElementById('fit-btn').addEventListener('click', () => {
-                if (graphRenderer) {
-                    graphRenderer.fitToView();
-                    updateZoomLevel();
-                }
-            });
-
-            document.getElementById('reset-zoom-btn').addEventListener('click', () => {
-                if (graphRenderer) {
-                    graphRenderer.resetZoom();
-                    updateZoomLevel();
-                }
-            });
-
-            document.getElementById('relayout-btn').addEventListener('click', () => {
-                if (graphRenderer) {
-                    graphRenderer.relayout();
-                }
-            });
-
-            document.getElementById('export-btn').addEventListener('click', () => {
-                if (graphRenderer) {
-                    graphRenderer.exportToPNG();
-                }
-            });
-        }
-
-        // 更新缩放级别显示
-        function updateZoomLevel() {
-            if (graphRenderer) {
-                const zoom = Math.round(graphRenderer.scale * 100);
-                document.getElementById('zoom-level').textContent = zoom + '%';
-            }
-        }
-
-        // 接收来自扩展的消息
-        window.addEventListener('message', event => {
-            const message = event.data;
-            
-            switch (message.type) {
-                case 'updateGraph':
-                    graphData = message.data;
-                    renderGraph(graphData);
-                    break;
-            }
-        });
-
-        // 渲染图
-        function renderGraph(data) {
-            if (!graphRenderer) {
-                console.error('Graph renderer not initialized');
-                return;
-            }
-
-            console.log('Rendering graph with data:', data);
-            
-            // 渲染图
-            graphRenderer.renderGraph(data);
-
-            // 更新统计信息
-            document.getElementById('node-count').textContent = data.nodes.length;
-            document.getElementById('edge-count').textContent = data.edges.length;
-
-            // 自动适应视图
-            setTimeout(() => {
-                graphRenderer.fitToView();
-                updateZoomLevel();
-            }, 100);
-        }
-
-        // 启动
-        init();
-    </script>
+    <div id="root"></div>
+    <script nonce="${nonce}" src="${graphAppUri}"></script>
 </body>
 </html>`;
     }

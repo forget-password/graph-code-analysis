@@ -35,7 +35,7 @@ export class CodeAnalyzer {
         const config = vscode.workspace.getConfiguration('codeAnalysis');
         const excludePatterns = config.get<string[]>('excludePatterns', []);
         const maxDepth = config.get<number>('maxDepth', 10);
-        const layoutAlgorithm = config.get<GraphLayoutAlgorithm>('layout', 'radial');
+        const layoutAlgorithm = config.get<GraphLayoutAlgorithm>('layout', 'elk');
         const analysisConcurrency = Math.max(
             1,
             config.get<number>('analysisConcurrency', this.defaultConcurrency)

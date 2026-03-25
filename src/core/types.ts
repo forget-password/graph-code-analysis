@@ -124,7 +124,7 @@ export interface GraphEdge {
     vertices?: Array<{ x: number; y: number }>;
 }
 
-export type GraphLayoutAlgorithm = 'dagre' | 'force' | 'circular' | 'radial';
+export type GraphLayoutAlgorithm = 'elk' | 'dagre' | 'force' | 'circular' | 'radial';
 
 /**
  * 图数据

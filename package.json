@@ -60,26 +60,32 @@
         "codeAnalysis.layout": {
           "type": "string",
           "enum": [
+            "elk",
             "dagre",
             "force",
             "circular",
             "radial"
           ],
-          "default": "radial",
-          "description": "Default graph layout algorithm"
+          "default": "elk",
+          "description": "Default graph layout algorithm. Legacy non-layered values fall back to ELK in the React Flow view."
         }
       }
     }
   },
   "scripts": {
     "vscode:prepublish": "pnpm run build",
-    "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node24",
-    "watch": "pnpm run build -- --watch",
+    "build": "pnpm run build:extension && pnpm run build:webview",
+    "build:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node24",
+    "build:webview": "esbuild ./src/webview/graphApp.jsx --bundle --outfile=media/graph-app.js --format=iife --platform=browser --target=es2020 --jsx=automatic --loader:.css=css --minify",
+    "watch": "pnpm run watch:extension & pnpm run watch:webview",
+    "watch:extension": "pnpm run build:extension -- --watch",
+    "watch:webview": "pnpm run build:webview -- --watch",
     "lint": "eslint src --ext ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "node ./dist/test/runTest.js"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.95.0",
     "@typescript-eslint/eslint-plugin": "^8.20.0",
@@ -91,8 +97,13 @@
     "typescript": "^5.7.2"
   },
   "dependencies": {
+    "@xyflow/react": "^12.10.1",
+    "dagre": "^0.8.5",
+    "elkjs": "^0.11.1",
+    "html-to-image": "^1.11.13",
     "jointjs": "^3.7.7",
-    "dagre": "^0.8.5"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
   },
   "packageManager": "pnpm@10.28.0"
 }
