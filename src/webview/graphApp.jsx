@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Background,
@@ -211,6 +211,7 @@ function decorateGraph(nodes, edges, matchedIds, expandedNodeIds, onToggleExpand
           expanded,
           isDimmed: !isMatched,
           lowDetailMode,
+          viewportMoving: node.data.viewportMoving ?? false,
           onToggleExpand,
         },
       };
@@ -353,7 +354,7 @@ function downloadDataUrl(filename, dataUrl) {
   anchor.click();
 }
 
-function FileNode({ data, selected }) {
+const FileNode = memo(function FileNode({ data, selected }) {
   const nodeId = useNodeId();
   const updateNodeInternals = useUpdateNodeInternals();
 
@@ -366,24 +367,36 @@ function FileNode({ data, selected }) {
   return (
     <div className={`file-node ${data.lowDetailMode ? 'file-node--minimal' : ''} ${data.isDimmed ? 'is-dimmed' : ''} ${selected ? 'is-selected' : ''}`}>
       <Handle type="target" position={data.targetPosition} className="file-node__handle" />
-      <button
-        type="button"
-        className="file-node__header nodrag nopan"
-        onClick={(event) => {
-          event.stopPropagation();
-          vscode.postMessage({
-            type: 'nodeClicked',
-            data: { nodeId: data.filePath },
-          });
-        }}
-      >
-        <div className="file-node__title">
-          <span>file</span>
-          <strong title={data.label}>{data.label}</strong>
+      {data.viewportMoving ? (
+        <div className="file-node__placeholder" aria-hidden="true">
+          <div className="file-node__placeholder-header">
+            <span className="file-node__placeholder-chip" />
+            <span className="file-node__placeholder-badge" />
+          </div>
+          <div className="file-node__placeholder-line file-node__placeholder-line--primary" />
+          <div className="file-node__placeholder-line" />
+          <div className="file-node__placeholder-line file-node__placeholder-line--short" />
         </div>
-        <div className="file-node__badge">{data.elementCount}</div>
-      </button>
-      {data.lowDetailMode ? (
+      ) : (
+        <>
+          <button
+            type="button"
+            className="file-node__header nodrag nopan"
+            onClick={(event) => {
+              event.stopPropagation();
+              vscode.postMessage({
+                type: 'nodeClicked',
+                data: { nodeId: data.filePath },
+              });
+            }}
+          >
+            <div className="file-node__title">
+              <span>file</span>
+              <strong title={data.label}>{data.label}</strong>
+            </div>
+            <div className="file-node__badge">{data.elementCount}</div>
+          </button>
+          {data.lowDetailMode ? (
         <div className="file-node__hint">Zoom in to inspect symbols</div>
       ) : (
         <>
@@ -436,10 +449,12 @@ function FileNode({ data, selected }) {
           ) : null}
         </>
       )}
+        </>
+      )}
       <Handle type="source" position={data.sourcePosition} className="file-node__handle" />
     </div>
   );
-}
+});
 
 const nodeTypes = {
   fileNode: FileNode,
@@ -453,6 +468,7 @@ function GraphCanvas() {
   const [layoutNonce, setLayoutNonce] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLayouting, setIsLayouting] = useState(false);
+  const [isViewportMoving, setIsViewportMoving] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [lowDetailMode, setLowDetailMode] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -460,6 +476,8 @@ function GraphCanvas() {
   const { fitView, setViewport } = useReactFlow();
   const zoomLevelRef = useRef(100);
   const lowDetailModeRef = useRef(false);
+  const viewportMovingRef = useRef(false);
+  const viewportZoomRef = useRef(1);
 
   const matchedNodeIds = useMemo(
     () => getMatchedNodeIds(graphData, searchTerm),
@@ -500,18 +518,33 @@ function GraphCanvas() {
     });
   }, []);
 
-  const syncViewportUi = useCallback((viewport) => {
+  const syncViewportMode = useCallback((viewport) => {
+    const nextLowDetailMode = viewport.zoom <= LOW_DETAIL_ZOOM_THRESHOLD;
+    if (nextLowDetailMode !== lowDetailModeRef.current) {
+      lowDetailModeRef.current = nextLowDetailMode;
+      startTransition(() => {
+        setLowDetailMode(nextLowDetailMode);
+      });
+    }
+  }, []);
+
+  const syncZoomLevel = useCallback((viewport) => {
     const nextZoomLevel = Math.round(viewport.zoom * 100);
     if (nextZoomLevel !== zoomLevelRef.current) {
       zoomLevelRef.current = nextZoomLevel;
       setZoomLevel(nextZoomLevel);
     }
+  }, []);
 
-    const nextLowDetailMode = viewport.zoom <= LOW_DETAIL_ZOOM_THRESHOLD;
-    if (nextLowDetailMode !== lowDetailModeRef.current) {
-      lowDetailModeRef.current = nextLowDetailMode;
-      setLowDetailMode(nextLowDetailMode);
+  const setViewportMovingState = useCallback((nextIsMoving) => {
+    if (nextIsMoving === viewportMovingRef.current) {
+      return;
     }
+
+    viewportMovingRef.current = nextIsMoving;
+    startTransition(() => {
+      setIsViewportMoving(nextIsMoving);
+    });
   }, []);
 
   useEffect(() => {
@@ -570,9 +603,17 @@ function GraphCanvas() {
       handleToggleExpand,
       lowDetailMode
     );
-    setNodes(decorated.nodes);
+    setNodes(
+      decorated.nodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          viewportMoving: isViewportMoving,
+        },
+      }))
+    );
     setEdges(decorated.edges);
-  }, [baseGraph, expandedNodeIds, graphData, handleToggleExpand, lowDetailMode, matchedNodeIds, setEdges, setNodes]);
+  }, [baseGraph, expandedNodeIds, graphData, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, setEdges, setNodes]);
 
   const handleExport = async () => {
     const viewport = document.querySelector('.react-flow__viewport');
@@ -608,7 +649,7 @@ function GraphCanvas() {
   const matchedCount = matchedNodeIds ? matchedNodeIds.size : totalNodes;
 
   return (
-    <div className="graph-app">
+    <div className={`graph-app ${lowDetailMode ? 'graph-app--overview' : ''} ${isViewportMoving ? 'graph-app--moving' : ''}`}>
       <div className="graph-toolbar">
         <div className="graph-toolbar__group">
           <select
@@ -676,11 +717,17 @@ function GraphCanvas() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onMove={(_, viewport) => {
-          syncViewportUi(viewport);
+          const nextIsZooming = Math.abs(viewport.zoom - viewportZoomRef.current) > 0.0001;
+          viewportZoomRef.current = viewport.zoom;
+          setViewportMovingState(nextIsZooming);
+          syncViewportMode(viewport);
         }}
         onMoveEnd={(_, viewport) => {
+          setViewportMovingState(false);
           if (viewport) {
-            syncViewportUi(viewport);
+            viewportZoomRef.current = viewport.zoom;
+            syncViewportMode(viewport);
+            syncZoomLevel(viewport);
           }
         }}
         onNodeDoubleClick={(_, node) => {
@@ -692,7 +739,6 @@ function GraphCanvas() {
         fitView
         minZoom={0.1}
         maxZoom={2.5}
-        onlyRenderVisibleElements
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={24} size={1.2} />
@@ -700,7 +746,12 @@ function GraphCanvas() {
           pannable
           zoomable
           nodeColor={(node) => (node.data?.isDimmed ? 'rgba(128, 128, 128, 0.32)' : 'rgba(14, 99, 156, 0.85)')}
-          maskColor="rgba(0, 0, 0, 0.2)"
+          nodeStrokeColor={(node) => (node.data?.isDimmed ? 'rgba(145, 145, 145, 0.38)' : 'rgba(208, 238, 255, 0.72)')}
+          nodeStrokeWidth={1.6}
+          maskColor="rgba(2, 10, 24, 0.42)"
+          maskStrokeColor="rgba(126, 217, 255, 0.98)"
+          maskStrokeWidth={2.4}
+          offsetScale={8}
         />
       </ReactFlow>
     </div>
