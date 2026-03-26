@@ -184,26 +184,120 @@ function buildEdgeMetadata(graphData) {
   });
 }
 
-function getMatchedNodeIds(graphData, searchTerm) {
-  const normalized = searchTerm.trim().toLowerCase();
-  if (!normalized || !graphData) {
-    return null;
+const SEARCH_TYPE_ICONS = { file: '📄', folder: '📁', symbol: '⚡' };
+const SEARCH_TYPE_LABELS = { file: 'Files', folder: 'Folders', symbol: 'Symbols' };
+const SEARCH_RESULT_LIMIT = 24;
+
+function buildSearchIndex(graphData) {
+  if (!graphData?.nodes?.length) {
+    return [];
   }
 
-  return new Set(
-    graphData.nodes
-      .filter((node) => {
-        const inFile = node.label.toLowerCase().includes(normalized)
-          || node.filePath.toLowerCase().includes(normalized);
-        const inElements = (node.elements ?? []).some((element) => (
-          element.name.toLowerCase().includes(normalized)
-          || element.kind.toLowerCase().includes(normalized)
-        ));
+  const entries = [];
+  const folderMap = new Map();
 
-        return inFile || inElements;
-      })
-      .map((node) => node.id)
-  );
+  graphData.nodes.forEach((node) => {
+    entries.push({
+      type: 'file',
+      label: node.label,
+      detail: node.filePath,
+      nodeIds: [node.id],
+    });
+
+    const lastSlash = node.filePath.lastIndexOf('/');
+    if (lastSlash > 0) {
+      const folder = node.filePath.substring(0, lastSlash);
+      if (!folderMap.has(folder)) {
+        folderMap.set(folder, []);
+      }
+      folderMap.get(folder).push(node.id);
+    }
+
+    (node.elements ?? []).forEach((element) => {
+      entries.push({
+        type: 'symbol',
+        label: element.name,
+        detail: `${element.kind} · ${node.label}`,
+        nodeIds: [node.id],
+      });
+    });
+  });
+
+  folderMap.forEach((nodeIds, folderPath) => {
+    const parts = folderPath.split('/');
+    entries.push({
+      type: 'folder',
+      label: parts[parts.length - 1] || folderPath,
+      detail: `${folderPath} · ${nodeIds.length} files`,
+      nodeIds,
+    });
+  });
+
+  return entries;
+}
+
+function filterSearchSuggestions(index, term) {
+  const normalized = term.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+
+  const scored = [];
+
+  index.forEach((item) => {
+    const labelLower = item.label.toLowerCase();
+    const detailLower = item.detail.toLowerCase();
+    const inLabel = labelLower.includes(normalized);
+    const inDetail = detailLower.includes(normalized);
+
+    if (!inLabel && !inDetail) {
+      return;
+    }
+
+    let score = inLabel ? 2 : 1;
+    if (labelLower === normalized) {
+      score = 4;
+    } else if (labelLower.startsWith(normalized)) {
+      score = 3;
+    }
+
+    const typeOrder = item.type === 'file' ? 0 : (item.type === 'folder' ? 1 : 2);
+    scored.push({ ...item, score, typeOrder });
+  });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    if (a.typeOrder !== b.typeOrder) {
+      return a.typeOrder - b.typeOrder;
+    }
+    return a.label.localeCompare(b.label);
+  });
+
+  return scored.slice(0, SEARCH_RESULT_LIMIT);
+}
+
+function getConnectedNodeIds(seedNodeIds, graphData) {
+  const connected = new Set(seedNodeIds);
+
+  if (!graphData?.edges) {
+    return connected;
+  }
+
+  graphData.edges.forEach((edge) => {
+    const sourceId = edge.source?.nodeId ?? edge.source;
+    const targetId = edge.target?.nodeId ?? edge.target;
+
+    if (connected.has(sourceId)) {
+      connected.add(targetId);
+    }
+    if (connected.has(targetId)) {
+      connected.add(sourceId);
+    }
+  });
+
+  return connected;
 }
 
 function decorateNodes(nodes, matchedIds, expandedNodeIds, onToggleExpand, lowDetailMode, viewportMoving) {
@@ -1003,6 +1097,9 @@ function GraphCanvas() {
   const [layoutEngine, setLayoutEngine] = useState('elk');
   const [layoutNonce, setLayoutNonce] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
+  const [activeFilter, setActiveFilter] = useState(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isLayouting, setIsLayouting] = useState(false);
   const [isViewportMoving, setIsViewportMoving] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(100);
@@ -1030,11 +1127,25 @@ function GraphCanvas() {
   const movingTimerRef = useRef(null);
   const isDraggingRef = useRef(false);
   const lastEdgeRebuildRef = useRef(0);
+  const searchBlurTimerRef = useRef(null);
+  const suggestionsRef = useRef(null);
 
-  const matchedNodeIds = useMemo(
-    () => getMatchedNodeIds(graphData, searchTerm),
-    [graphData, searchTerm]
+  const searchIndex = useMemo(
+    () => buildSearchIndex(graphData),
+    [graphData]
   );
+
+  const suggestions = useMemo(
+    () => filterSearchSuggestions(searchIndex, searchTerm),
+    [searchIndex, searchTerm]
+  );
+
+  const matchedNodeIds = useMemo(() => {
+    if (!activeFilter) {
+      return null;
+    }
+    return getConnectedNodeIds(activeFilter.nodeIds, graphData);
+  }, [activeFilter, graphData]);
 
   const resetCanvasTransform = useCallback(() => {
     [edgeCanvasRef.current, arrowCanvasRef.current].forEach((canvas) => {
@@ -1439,6 +1550,75 @@ function GraphCanvas() {
   const totalNodes = graphData?.nodes?.length ?? 0;
   const matchedCount = matchedNodeIds ? matchedNodeIds.size : totalNodes;
 
+  const handleSearchChange = useCallback((event) => {
+    const value = event.target.value;
+    setSearchTerm(value);
+    setHighlightedIndex(-1);
+    setShowSuggestions(value.trim().length > 0);
+
+    if (!value.trim()) {
+      setActiveFilter(null);
+    }
+  }, []);
+
+  const handleSelectSuggestion = useCallback((suggestion) => {
+    setActiveFilter(suggestion);
+    setSearchTerm(suggestion.label);
+    setShowSuggestions(false);
+    setHighlightedIndex(-1);
+  }, []);
+
+  const handleClearFilter = useCallback(() => {
+    setActiveFilter(null);
+    setSearchTerm('');
+    setShowSuggestions(false);
+    setHighlightedIndex(-1);
+  }, []);
+
+  const handleSearchFocus = useCallback(() => {
+    if (searchTerm.trim()) {
+      setShowSuggestions(true);
+    }
+  }, [searchTerm]);
+
+  const handleSearchBlur = useCallback(() => {
+    searchBlurTimerRef.current = setTimeout(() => {
+      setShowSuggestions(false);
+    }, 200);
+  }, []);
+
+  const handleSearchKeyDown = useCallback((event) => {
+    if (!showSuggestions || suggestions.length === 0) {
+      if (event.key === 'Escape' && activeFilter) {
+        handleClearFilter();
+      }
+      return;
+    }
+
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        setHighlightedIndex((i) => (i + 1) % suggestions.length);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        setHighlightedIndex((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
+        break;
+      case 'Enter':
+        event.preventDefault();
+        if (highlightedIndex >= 0 && highlightedIndex < suggestions.length) {
+          handleSelectSuggestion(suggestions[highlightedIndex]);
+        }
+        break;
+      case 'Escape':
+        event.preventDefault();
+        setShowSuggestions(false);
+        break;
+      default:
+        break;
+    }
+  }, [activeFilter, handleClearFilter, handleSelectSuggestion, highlightedIndex, showSuggestions, suggestions]);
+
   return (
     <div className={`graph-app ${lowDetailMode ? 'graph-app--overview' : ''} ${isViewportMoving ? 'graph-app--moving' : ''}`}>
       <div className="graph-toolbar">
@@ -1469,15 +1649,60 @@ function GraphCanvas() {
       </div>
 
       <div className="graph-search">
-        <span className="graph-search__label">Search</span>
-        <input
-          className="graph-search__input"
-          type="text"
-          value={searchTerm}
-          placeholder="Filter files or symbols"
-          onChange={(event) => setSearchTerm(event.target.value)}
-        />
-        <span className="graph-search__summary">{matchedCount}/{totalNodes}</span>
+        {activeFilter ? (
+          <div className="graph-search__active-filter">
+            <span className="graph-search__filter-icon">{SEARCH_TYPE_ICONS[activeFilter.type]}</span>
+            <span className="graph-search__filter-label" title={activeFilter.detail}>{activeFilter.label}</span>
+            <span className="graph-search__filter-count">{matchedCount} nodes</span>
+            <button
+              type="button"
+              className="graph-search__filter-clear"
+              onClick={handleClearFilter}
+            >
+              ✕
+            </button>
+          </div>
+        ) : null}
+        <div className="graph-search__input-wrap">
+          <input
+            className="graph-search__input"
+            type="text"
+            value={searchTerm}
+            placeholder={activeFilter ? 'Refine search...' : 'Search files, folders, or symbols'}
+            onChange={handleSearchChange}
+            onFocus={handleSearchFocus}
+            onBlur={handleSearchBlur}
+            onKeyDown={handleSearchKeyDown}
+          />
+          {searchTerm && !activeFilter ? (
+            <button type="button" className="graph-search__input-clear" onClick={handleClearFilter}>✕</button>
+          ) : null}
+        </div>
+        {showSuggestions && suggestions.length > 0 ? (
+          <div ref={suggestionsRef} className="graph-search__dropdown">
+            {suggestions.map((item, index) => (
+              <button
+                key={`${item.type}-${item.label}-${index}`}
+                type="button"
+                className={`graph-search__suggestion ${index === highlightedIndex ? 'graph-search__suggestion--active' : ''}`}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  handleSelectSuggestion(item);
+                }}
+                onMouseEnter={() => setHighlightedIndex(index)}
+              >
+                <span className="graph-search__suggestion-icon">{SEARCH_TYPE_ICONS[item.type]}</span>
+                <span className="graph-search__suggestion-label">{item.label}</span>
+                <span className="graph-search__suggestion-detail">{item.detail}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {showSuggestions && searchTerm.trim() && suggestions.length === 0 ? (
+          <div className="graph-search__dropdown">
+            <div className="graph-search__no-results">No results found</div>
+          </div>
+        ) : null}
       </div>
 
       <div className="graph-stats">
