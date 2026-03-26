@@ -871,53 +871,6 @@ body {
   background: var(--graph-hover);
 }
 
-.graph-explorer__filter {
-  padding: 12px 14px 0;
-}
-
-.graph-explorer__filter-input-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.graph-explorer__filter-input,
-.graph-explorer__filter-clear {
-  font: inherit;
-}
-
-.graph-explorer__filter-input {
-  width: 100%;
-  border: 1px solid var(--graph-border);
-  border-radius: 10px;
-  background: var(--graph-surface);
-  color: var(--vscode-foreground);
-  padding: 8px 12px;
-  padding-right: 34px;
-  outline: none;
-}
-
-.graph-explorer__filter-input:focus {
-  border-color: color-mix(in srgb, var(--graph-accent) 52%, transparent);
-}
-
-.graph-explorer__filter-clear {
-  position: absolute;
-  right: 8px;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--graph-muted);
-  cursor: pointer;
-}
-
-.graph-explorer__filter-clear:hover {
-  background: var(--graph-hover);
-  color: var(--vscode-foreground);
-}
-
 .graph-explorer__body {
   flex: 1;
   overflow: auto;

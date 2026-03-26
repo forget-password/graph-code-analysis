@@ -173,11 +173,28 @@ export class CodeAnalyzer {
      * 检查是否应该排除
      */
     private shouldExclude(relativePath: string, matchers: RegExp[]): boolean {
-        return matchers.some((matcher) => matcher.test(relativePath));
+        const normalizedPath = relativePath.split(path.sep).join('/');
+        return matchers.some((matcher) => matcher.test(normalizedPath));
     }
 
     private createExcludeRegex(pattern: string): RegExp {
-        return new RegExp(pattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*'));
+        const normalizedPattern = pattern.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (!normalizedPattern) {
+            return /^$/;
+        }
+
+        // Plain segment names like "dist" exclude that directory/file segment and everything below it.
+        if (!normalizedPattern.includes('/') && !normalizedPattern.includes('*')) {
+            const escapedSegment = normalizedPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(`(?:^|/)${escapedSegment}(?:/|$)`);
+        }
+
+        const escapedGlob = normalizedPattern
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*\*/g, '.*')
+            .replace(/\*/g, '[^/]*');
+
+        return new RegExp(`^${escapedGlob}$`);
     }
 
     private async analyzeFiles(

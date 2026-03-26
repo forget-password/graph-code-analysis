@@ -1,4 +1,4 @@
-import React, { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Background,
@@ -421,98 +421,6 @@ function filterGraphDataByTreeSelection(graphData, treeSelection) {
       const targetId = edge.target?.nodeId ?? edge.target;
       return visibleNodeIds.has(sourceId) && visibleNodeIds.has(targetId);
     }),
-  };
-}
-
-function normalizeFilterQuery(query) {
-  return query.trim().toLowerCase();
-}
-
-function scoreFuzzyMatch(query, candidate) {
-  const normalizedQuery = normalizeFilterQuery(query);
-  const normalizedCandidate = candidate.toLowerCase();
-
-  if (!normalizedQuery) {
-    return { score: 0, indices: [] };
-  }
-
-  let queryIndex = 0;
-  let score = 0;
-  let consecutive = 0;
-  let firstMatchIndex = -1;
-  const indices = [];
-
-  for (let candidateIndex = 0; candidateIndex < normalizedCandidate.length; candidateIndex += 1) {
-    if (normalizedCandidate[candidateIndex] !== normalizedQuery[queryIndex]) {
-      consecutive = 0;
-      continue;
-    }
-
-    indices.push(candidateIndex);
-    if (firstMatchIndex === -1) {
-      firstMatchIndex = candidateIndex;
-    }
-
-    consecutive += 1;
-    score += 1 + (consecutive * 2);
-
-    const previousChar = candidateIndex > 0 ? normalizedCandidate[candidateIndex - 1] : '';
-    if (candidateIndex === 0 || previousChar === '/' || previousChar === '_' || previousChar === '-' || previousChar === ' ') {
-      score += 4;
-    }
-
-    queryIndex += 1;
-    if (queryIndex === normalizedQuery.length) {
-      score += Math.max(0, 12 - firstMatchIndex);
-      return { score, indices };
-    }
-  }
-
-  return null;
-}
-
-function filterExplorerTree(node, query) {
-  const normalizedQuery = normalizeFilterQuery(query);
-  if (!normalizedQuery) {
-    return node;
-  }
-
-  const normalizedLabel = node.label.toLowerCase();
-  const labelMatch = normalizedLabel.includes(normalizedQuery)
-    ? { score: normalizedQuery.length + (normalizedLabel.startsWith(normalizedQuery) ? 4 : 0), indices: [] }
-    : null;
-  const relativePath = (node.relativePath ?? node.label).toLowerCase();
-  const pathMatch = relativePath.includes(normalizedQuery)
-    ? { score: normalizedQuery.length + 2, indices: [] }
-    : null;
-  const selfMatch = labelMatch || pathMatch;
-  const keepAllChildren = Boolean(selfMatch && node.type === 'folder');
-
-  if (node.type === 'file') {
-    if (!selfMatch) {
-      return null;
-    }
-
-    return {
-      ...node,
-      filterScore: Math.max(labelMatch?.score ?? 0, pathMatch?.score ?? 0),
-    };
-  }
-
-  const filteredChildren = keepAllChildren
-    ? node.children ?? []
-    : (node.children ?? [])
-      .map((child) => filterExplorerTree(child, normalizedQuery))
-      .filter(Boolean);
-
-  if (!selfMatch && filteredChildren.length === 0) {
-    return null;
-  }
-
-  return {
-    ...node,
-    children: filteredChildren,
-    filterScore: Math.max(labelMatch?.score ?? 0, pathMatch?.score ?? 0),
   };
 }
 
@@ -1499,7 +1407,6 @@ function GraphCanvas() {
   const [activeFilter, setActiveFilter] = useState(null);
   const [treeSelection, setTreeSelection] = useState(null);
   const [treeFocus, setTreeFocus] = useState(null);
-  const [explorerFilterTerm, setExplorerFilterTerm] = useState('');
   const [collapsedFolderIds, setCollapsedFolderIds] = useState(() => new Set());
   const [showExplorer, setShowExplorer] = useState(true);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -1533,7 +1440,6 @@ function GraphCanvas() {
   const lastEdgeRebuildRef = useRef(0);
   const searchBlurTimerRef = useRef(null);
   const suggestionsRef = useRef(null);
-  const deferredExplorerFilterTerm = useDeferredValue(explorerFilterTerm);
 
   const scopedGraphData = useMemo(
     () => filterGraphDataByTreeSelection(graphData, treeSelection),
@@ -1543,11 +1449,6 @@ function GraphCanvas() {
   const explorerTree = useMemo(
     () => buildExplorerTree(graphData),
     [graphData]
-  );
-
-  const filteredExplorerTree = useMemo(
-    () => (explorerTree ? filterExplorerTree(explorerTree.root, deferredExplorerFilterTerm) : null),
-    [deferredExplorerFilterTerm, explorerTree]
   );
 
   const searchIndex = useMemo(
@@ -1711,7 +1612,6 @@ function GraphCanvas() {
       setLayoutEngine(normalizeAlgorithm(message.data?.layout?.algorithm));
       setTreeSelection(null);
       setTreeFocus(null);
-      setExplorerFilterTerm('');
       setCollapsedFolderIds(new Set());
     };
 
@@ -1895,7 +1795,7 @@ function GraphCanvas() {
     if (target) {
       target.scrollIntoView({ block: 'nearest' });
     }
-  }, [showExplorer, treeFocus, filteredExplorerTree]);
+  }, [showExplorer, treeFocus, explorerTree]);
 
   const handleToggleExpand = useCallback((nodeId) => {
     setExpandedNodeIds((currentIds) => {
@@ -2107,14 +2007,6 @@ function GraphCanvas() {
     });
   }, []);
 
-  const handleExplorerFilterChange = useCallback((event) => {
-    setExplorerFilterTerm(event.target.value);
-  }, []);
-
-  const handleClearExplorerFilter = useCallback(() => {
-    setExplorerFilterTerm('');
-  }, []);
-
   const handleSearchFocus = useCallback(() => {
     if (searchTerm.trim()) {
       setShowSuggestions(true);
@@ -2292,31 +2184,10 @@ function GraphCanvas() {
               Select a folder or file to scope the graph
             </div>
           )}
-          <div className="graph-explorer__filter">
-            <div className="graph-explorer__filter-input-wrap">
-              <input
-                type="text"
-                className="graph-explorer__filter-input"
-                value={explorerFilterTerm}
-                onChange={handleExplorerFilterChange}
-                placeholder="Filter files and folders"
-              />
-              {explorerFilterTerm ? (
-                <button
-                  type="button"
-                  className="graph-explorer__filter-clear"
-                  onClick={handleClearExplorerFilter}
-                  aria-label="Clear explorer filter"
-                >
-                  ✕
-                </button>
-              ) : null}
-            </div>
-          </div>
           <div className="graph-explorer__body">
-            {filteredExplorerTree ? (
+            {explorerTree ? (
               <ExplorerTreeItem
-                node={filteredExplorerTree}
+                node={explorerTree.root}
                 level={0}
                 collapsedFolderIds={collapsedFolderIds}
                 treeFocus={treeFocus}
