@@ -47,6 +47,7 @@ body {
   height: 100%;
   position: relative;
   z-index: 2;
+  contain: layout style;
 }
 
 .graph-edge-layer,
@@ -258,6 +259,9 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
   overflow: hidden;
   transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px auto 200px;
+  contain: layout style paint;
 }
 
 .graph-app--overview .react-flow__background {
@@ -303,6 +307,9 @@ body {
   background: color-mix(in srgb, var(--graph-panel-strong) 99%, transparent);
   box-shadow: none;
   transition: none;
+  contain: strict;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px auto 120px;
 }
 
 .graph-app--moving .file-node:hover,
@@ -486,6 +493,7 @@ body {
   min-height: 32px;
   display: flex;
   align-items: center;
+  contain: layout style;
 }
 
 .file-node__symbol {

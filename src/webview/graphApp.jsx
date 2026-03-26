@@ -29,6 +29,7 @@ const EXPANDED_PREVIEW_LIMIT = 12;
 const COMPACT_EXPANDED_PREVIEW_LIMIT = 9;
 const COMPACT_NODE_COUNT = 90;
 const COMPACT_EDGE_COUNT = 180;
+const VIEWPORT_MOVING_DEBOUNCE_MS = 120;
 const LOW_DETAIL_ZOOM_THRESHOLD = 0.18;
 
 const EDGE_COLORS = {
@@ -865,6 +866,25 @@ function downloadDataUrl(filename, dataUrl) {
   anchor.click();
 }
 
+function fileNodePropsAreEqual(prev, next) {
+  const prevData = prev.data;
+  const nextData = next.data;
+
+  return (
+    prev.selected === next.selected
+    && prevData.nodeId === nextData.nodeId
+    && prevData.expanded === nextData.expanded
+    && prevData.isDimmed === nextData.isDimmed
+    && prevData.lowDetailMode === nextData.lowDetailMode
+    && prevData.viewportMoving === nextData.viewportMoving
+    && prevData.elementCount === nextData.elementCount
+    && prevData.sourcePosition === nextData.sourcePosition
+    && prevData.targetPosition === nextData.targetPosition
+    && prevData.label === nextData.label
+    && prevData.canExpand === nextData.canExpand
+  );
+}
+
 const FileNode = memo(function FileNode({ data, selected }) {
   const nodeId = useNodeId();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -874,6 +894,15 @@ const FileNode = memo(function FileNode({ data, selected }) {
       updateNodeInternals(nodeId);
     }
   }, [data.expanded, data.lowDetailMode, nodeId, updateNodeInternals]);
+
+  const visibleElements = useMemo(() => {
+    if (data.lowDetailMode || data.viewportMoving) {
+      return [];
+    }
+
+    const limit = data.expanded ? EXPANDED_PREVIEW_LIMIT : PREVIEW_LIMIT;
+    return data.elements.slice(0, limit);
+  }, [data.elements, data.expanded, data.lowDetailMode, data.viewportMoving]);
 
   return (
     <div className={`file-node ${data.lowDetailMode ? 'file-node--minimal' : ''} ${data.isDimmed ? 'is-dimmed' : ''} ${selected ? 'is-selected' : ''}`}>
@@ -914,7 +943,7 @@ const FileNode = memo(function FileNode({ data, selected }) {
                   event.stopPropagation();
                 }}
               >
-                {data.elements.length > 0 ? data.elements.map((element) => {
+                {visibleElements.length > 0 ? visibleElements.map((element) => {
                   const start = getRangeStart(element.range);
                   return (
                     <button
@@ -961,7 +990,7 @@ const FileNode = memo(function FileNode({ data, selected }) {
       <Handle type="source" position={data.sourcePosition} className="file-node__handle" />
     </div>
   );
-});
+}, fileNodePropsAreEqual);
 
 const nodeTypes = {
   fileNode: FileNode,
@@ -998,6 +1027,9 @@ function GraphCanvas() {
   const lowDetailModeRef = useRef(false);
   const viewportMovingRef = useRef(false);
   const viewportZoomRef = useRef(1);
+  const movingTimerRef = useRef(null);
+  const isDraggingRef = useRef(false);
+  const lastEdgeRebuildRef = useRef(0);
 
   const matchedNodeIds = useMemo(
     () => getMatchedNodeIds(graphData, searchTerm),
@@ -1102,14 +1134,31 @@ function GraphCanvas() {
   }, []);
 
   const setViewportMovingState = useCallback((nextIsMoving) => {
-    if (nextIsMoving === viewportMovingRef.current) {
-      return;
-    }
+    if (nextIsMoving) {
+      if (movingTimerRef.current) {
+        clearTimeout(movingTimerRef.current);
+        movingTimerRef.current = null;
+      }
 
-    viewportMovingRef.current = nextIsMoving;
-    startTransition(() => {
-      setIsViewportMoving(nextIsMoving);
-    });
+      if (!viewportMovingRef.current) {
+        viewportMovingRef.current = true;
+        startTransition(() => {
+          setIsViewportMoving(true);
+        });
+      }
+    } else {
+      if (movingTimerRef.current) {
+        clearTimeout(movingTimerRef.current);
+      }
+
+      movingTimerRef.current = setTimeout(() => {
+        movingTimerRef.current = null;
+        viewportMovingRef.current = false;
+        startTransition(() => {
+          setIsViewportMoving(false);
+        });
+      }, VIEWPORT_MOVING_DEBOUNCE_MS);
+    }
   }, []);
 
   const updateEdgeScene = useCallback((nextNodes, nextEdges, nextMatchedIds) => {
@@ -1313,20 +1362,44 @@ function GraphCanvas() {
     });
   }, [baseGraph, expandedNodeIds, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, setNodes, updateEdgeScene]);
 
-  useEffect(() => {
-    if (nodes.length === 0 && baseGraph.edges.length === 0) {
-      return;
-    }
-
-    updateEdgeScene(nodes, baseGraph.edges, matchedNodeIds);
-  }, [baseGraph.edges, matchedNodeIds, nodes, updateEdgeScene]);
+  // Edge scene is rebuilt by the decoration effect above and by handleNodesChange during drag.
+  // No separate nodes-change effect needed — it caused double rebuilds on every drag frame.
 
   const handleNodesChange = useCallback((changes) => {
     onNodesChange(changes);
+
+    const hasDrag = changes.some((change) => change.type === 'position' && change.dragging);
+    const dragEnded = changes.some((change) => change.type === 'position' && !change.dragging && change.position);
+
+    if (hasDrag) {
+      isDraggingRef.current = true;
+    }
+
+    if (dragEnded) {
+      isDraggingRef.current = false;
+    }
+
+    if (hasDrag || dragEnded) {
+      const now = performance.now();
+      const elapsed = now - lastEdgeRebuildRef.current;
+
+      if (dragEnded || elapsed > 32) {
+        lastEdgeRebuildRef.current = now;
+        window.requestAnimationFrame(() => {
+          setNodes((currentNodes) => {
+            updateEdgeScene(currentNodes, baseGraph.edges, matchedNodeIds);
+            return currentNodes;
+          });
+        });
+
+        return;
+      }
+    }
+
     window.requestAnimationFrame(() => {
       scheduleRender();
     });
-  }, [onNodesChange, scheduleRender]);
+  }, [baseGraph.edges, matchedNodeIds, onNodesChange, scheduleRender, setNodes, updateEdgeScene]);
 
   const handleExport = async () => {
     const viewport = flowShellRef.current;
