@@ -1,4 +1,4 @@
-import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Background,
@@ -236,6 +236,280 @@ function buildSearchIndex(graphData) {
   return entries;
 }
 
+function getDirectoryPath(filePath) {
+  const lastSlash = filePath.lastIndexOf('/');
+  return lastSlash > 0 ? filePath.slice(0, lastSlash) : '';
+}
+
+function getBaseName(pathValue) {
+  const lastSlash = pathValue.lastIndexOf('/');
+  return lastSlash >= 0 ? pathValue.slice(lastSlash + 1) : pathValue;
+}
+
+function getAncestorFolderPaths(filePath, rootPath) {
+  const normalizedRoot = rootPath || '';
+  const relativePath = normalizedRoot && filePath.startsWith(`${normalizedRoot}/`)
+    ? filePath.slice(normalizedRoot.length + 1)
+    : filePath.replace(/^\/+/, '');
+  const segments = relativePath.split('/').filter(Boolean);
+  const ancestors = [];
+  let currentPath = normalizedRoot;
+
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    currentPath = joinExplorerPath(currentPath, segments[index]);
+    ancestors.push(currentPath);
+  }
+
+  return ancestors;
+}
+
+function getCommonFolderPath(filePaths) {
+  if (!filePaths.length) {
+    return '';
+  }
+
+  const folderSegments = filePaths.map((filePath) => getDirectoryPath(filePath).split('/').filter(Boolean));
+  const minLength = Math.min(...folderSegments.map((segments) => segments.length));
+  const commonSegments = [];
+
+  for (let index = 0; index < minLength; index += 1) {
+    const segment = folderSegments[0][index];
+    if (folderSegments.every((segments) => segments[index] === segment)) {
+      commonSegments.push(segment);
+    } else {
+      break;
+    }
+  }
+
+  return commonSegments.length > 0 ? `/${commonSegments.join('/')}` : '';
+}
+
+function joinExplorerPath(parentPath, segment) {
+  if (!parentPath) {
+    return `/${segment}`;
+  }
+
+  return `${parentPath}/${segment}`;
+}
+
+function sortExplorerChildren(children) {
+  return [...children].sort((left, right) => {
+    if (left.type !== right.type) {
+      return left.type === 'folder' ? -1 : 1;
+    }
+
+    return left.label.localeCompare(right.label);
+  }).map((child) => (
+    child.type === 'folder'
+      ? { ...child, children: sortExplorerChildren(child.children ?? []) }
+      : child
+  ));
+}
+
+function buildExplorerTree(graphData) {
+  if (!graphData?.nodes?.length) {
+    return null;
+  }
+
+  const rootPath = getCommonFolderPath(graphData.nodes.map((node) => node.filePath));
+  const root = {
+    id: rootPath || '__workspace__',
+    type: 'folder',
+    label: getBaseName(rootPath) || 'Workspace',
+    path: rootPath,
+    relativePath: '',
+    children: [],
+  };
+  const folderMap = new Map([[root.path || '__workspace__', root]]);
+
+  graphData.nodes
+    .slice()
+    .sort((left, right) => left.filePath.localeCompare(right.filePath))
+    .forEach((node) => {
+      const relativePath = rootPath && node.filePath.startsWith(`${rootPath}/`)
+        ? node.filePath.slice(rootPath.length + 1)
+        : node.filePath.replace(/^\/+/, '');
+      const segments = relativePath.split('/').filter(Boolean);
+
+      let currentFolder = root;
+      let currentPath = root.path;
+
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        const segment = segments[index];
+        const nextPath = joinExplorerPath(currentPath, segment);
+        const folderKey = nextPath || '__workspace__';
+        let folderNode = folderMap.get(folderKey);
+
+        if (!folderNode) {
+          folderNode = {
+            id: nextPath,
+            type: 'folder',
+            label: segment,
+            path: nextPath,
+            relativePath: currentFolder.relativePath ? `${currentFolder.relativePath}/${segment}` : segment,
+            children: [],
+          };
+          currentFolder.children.push(folderNode);
+          folderMap.set(folderKey, folderNode);
+        }
+
+        currentFolder = folderNode;
+        currentPath = nextPath;
+      }
+
+      currentFolder.children.push({
+        id: node.id,
+        type: 'file',
+        label: getBaseName(node.filePath),
+        path: node.filePath,
+        relativePath,
+        nodeId: node.id,
+      });
+    });
+
+  return {
+    root: { ...root, children: sortExplorerChildren(root.children) },
+    rootPath,
+  };
+}
+
+function filterGraphDataByTreeSelection(graphData, treeSelection) {
+  if (!graphData || !treeSelection) {
+    return graphData;
+  }
+
+  const seedNodeIds = new Set();
+
+  if (treeSelection.type === 'file') {
+    graphData.nodes.forEach((node) => {
+      if (node.id === treeSelection.nodeId && node.filePath === treeSelection.path) {
+        seedNodeIds.add(node.id);
+      }
+    });
+  } else if (treeSelection.type === 'folder') {
+    graphData.nodes.forEach((node) => {
+      if (
+        node.filePath === treeSelection.path
+        || node.filePath.startsWith(`${treeSelection.path}/`)
+      ) {
+        seedNodeIds.add(node.id);
+      }
+    });
+  }
+
+  if (seedNodeIds.size === 0) {
+    return {
+      ...graphData,
+      nodes: [],
+      edges: [],
+    };
+  }
+
+  const visibleNodeIds = getDirectRelatedNodeIds(seedNodeIds, graphData);
+
+  return {
+    ...graphData,
+    nodes: graphData.nodes.filter((node) => visibleNodeIds.has(node.id)),
+    edges: graphData.edges.filter((edge) => {
+      const sourceId = edge.source?.nodeId ?? edge.source;
+      const targetId = edge.target?.nodeId ?? edge.target;
+      return visibleNodeIds.has(sourceId) && visibleNodeIds.has(targetId);
+    }),
+  };
+}
+
+function normalizeFilterQuery(query) {
+  return query.trim().toLowerCase();
+}
+
+function scoreFuzzyMatch(query, candidate) {
+  const normalizedQuery = normalizeFilterQuery(query);
+  const normalizedCandidate = candidate.toLowerCase();
+
+  if (!normalizedQuery) {
+    return { score: 0, indices: [] };
+  }
+
+  let queryIndex = 0;
+  let score = 0;
+  let consecutive = 0;
+  let firstMatchIndex = -1;
+  const indices = [];
+
+  for (let candidateIndex = 0; candidateIndex < normalizedCandidate.length; candidateIndex += 1) {
+    if (normalizedCandidate[candidateIndex] !== normalizedQuery[queryIndex]) {
+      consecutive = 0;
+      continue;
+    }
+
+    indices.push(candidateIndex);
+    if (firstMatchIndex === -1) {
+      firstMatchIndex = candidateIndex;
+    }
+
+    consecutive += 1;
+    score += 1 + (consecutive * 2);
+
+    const previousChar = candidateIndex > 0 ? normalizedCandidate[candidateIndex - 1] : '';
+    if (candidateIndex === 0 || previousChar === '/' || previousChar === '_' || previousChar === '-' || previousChar === ' ') {
+      score += 4;
+    }
+
+    queryIndex += 1;
+    if (queryIndex === normalizedQuery.length) {
+      score += Math.max(0, 12 - firstMatchIndex);
+      return { score, indices };
+    }
+  }
+
+  return null;
+}
+
+function filterExplorerTree(node, query) {
+  const normalizedQuery = normalizeFilterQuery(query);
+  if (!normalizedQuery) {
+    return node;
+  }
+
+  const normalizedLabel = node.label.toLowerCase();
+  const labelMatch = normalizedLabel.includes(normalizedQuery)
+    ? { score: normalizedQuery.length + (normalizedLabel.startsWith(normalizedQuery) ? 4 : 0), indices: [] }
+    : null;
+  const relativePath = (node.relativePath ?? node.label).toLowerCase();
+  const pathMatch = relativePath.includes(normalizedQuery)
+    ? { score: normalizedQuery.length + 2, indices: [] }
+    : null;
+  const selfMatch = labelMatch || pathMatch;
+  const keepAllChildren = Boolean(selfMatch && node.type === 'folder');
+
+  if (node.type === 'file') {
+    if (!selfMatch) {
+      return null;
+    }
+
+    return {
+      ...node,
+      filterScore: Math.max(labelMatch?.score ?? 0, pathMatch?.score ?? 0),
+    };
+  }
+
+  const filteredChildren = keepAllChildren
+    ? node.children ?? []
+    : (node.children ?? [])
+      .map((child) => filterExplorerTree(child, normalizedQuery))
+      .filter(Boolean);
+
+  if (!selfMatch && filteredChildren.length === 0) {
+    return null;
+  }
+
+  return {
+    ...node,
+    children: filteredChildren,
+    filterScore: Math.max(labelMatch?.score ?? 0, pathMatch?.score ?? 0),
+  };
+}
+
 function filterSearchSuggestions(index, term) {
   const normalized = term.trim().toLowerCase();
   if (!normalized) {
@@ -300,7 +574,35 @@ function getConnectedNodeIds(seedNodeIds, graphData) {
   return connected;
 }
 
-function decorateNodes(nodes, matchedIds, expandedNodeIds, onToggleExpand, lowDetailMode, viewportMoving) {
+function getDirectRelatedNodeIds(seedNodeIds, graphData) {
+  const related = new Set(seedNodeIds);
+
+  if (!graphData?.edges) {
+    return related;
+  }
+
+  graphData.edges.forEach((edge) => {
+    const sourceId = edge.source?.nodeId ?? edge.source;
+    const targetId = edge.target?.nodeId ?? edge.target;
+
+    if (seedNodeIds.has(sourceId) || seedNodeIds.has(targetId)) {
+      related.add(sourceId);
+      related.add(targetId);
+    }
+  });
+
+  return related;
+}
+
+function decorateNodes(
+  nodes,
+  matchedIds,
+  expandedNodeIds,
+  onToggleExpand,
+  onFocusInTree,
+  lowDetailMode,
+  viewportMoving,
+) {
   const hasSearch = matchedIds !== null;
 
   return nodes.map((node) => {
@@ -323,6 +625,7 @@ function decorateNodes(nodes, matchedIds, expandedNodeIds, onToggleExpand, lowDe
         lowDetailMode,
         viewportMoving,
         onToggleExpand,
+        onFocusInTree,
       },
     };
   });
@@ -999,7 +1302,16 @@ const FileNode = memo(function FileNode({ data, selected }) {
   }, [data.elements, data.expanded, data.lowDetailMode, data.viewportMoving]);
 
   return (
-    <div className={`file-node ${data.lowDetailMode ? 'file-node--minimal' : ''} ${data.isDimmed ? 'is-dimmed' : ''} ${selected ? 'is-selected' : ''}`}>
+    <div
+      className={`file-node ${data.lowDetailMode ? 'file-node--minimal' : ''} ${data.isDimmed ? 'is-dimmed' : ''} ${selected ? 'is-selected' : ''}`}
+      onClickCapture={() => {
+        data.onFocusInTree?.({
+          id: data.nodeId,
+          filePath: data.filePath,
+          label: data.label,
+        });
+      }}
+    >
       <Handle type="target" position={data.targetPosition} className="file-node__handle" />
       {data.viewportMoving ? (
         <div className="file-node__placeholder" aria-hidden="true">
@@ -1090,6 +1402,87 @@ const nodeTypes = {
   fileNode: FileNode,
 };
 
+function ExplorerTreeItem({
+  node,
+  level,
+  collapsedFolderIds,
+  treeFocus,
+  treeSelection,
+  onToggleFolder,
+  onSelectFolder,
+  onSelectFile,
+}) {
+  const isFolder = node.type === 'folder';
+  const isCollapsed = isFolder && collapsedFolderIds.has(node.path);
+  const isSelected = treeSelection
+    && (
+      (treeSelection.type === 'folder' && treeSelection.path === node.path)
+      || (treeSelection.type === 'file' && treeSelection.nodeId === node.nodeId)
+    );
+  const isFocused = !isSelected && treeFocus
+    && (
+      (treeFocus.type === 'folder' && treeFocus.path === node.path)
+      || (treeFocus.type === 'file' && treeFocus.nodeId === node.nodeId)
+    );
+
+  return (
+    <div className="graph-explorer__node">
+      <div
+        className={`graph-explorer__row ${isSelected ? 'graph-explorer__row--selected' : ''} ${isFocused ? 'graph-explorer__row--focused' : ''}`}
+        style={{ paddingLeft: `${12 + (level * 14)}px` }}
+        data-tree-path={node.path}
+        data-tree-node-id={node.nodeId ?? ''}
+      >
+        {isFolder ? (
+          <button
+            type="button"
+            className="graph-explorer__caret"
+            onClick={() => onToggleFolder(node.path)}
+            aria-label={isCollapsed ? `Expand ${node.label}` : `Collapse ${node.label}`}
+          >
+            {isCollapsed ? '▸' : '▾'}
+          </button>
+        ) : (
+          <span className="graph-explorer__caret graph-explorer__caret--ghost" aria-hidden="true">•</span>
+        )}
+        <button
+          type="button"
+          className="graph-explorer__label"
+          onClick={() => {
+            if (isFolder) {
+              onSelectFolder(node);
+            } else {
+              onSelectFile(node);
+            }
+          }}
+          title={node.path}
+        >
+          <span className="graph-explorer__icon">{isFolder ? '📁' : '📄'}</span>
+          <span className="graph-explorer__text">{node.label}</span>
+        </button>
+      </div>
+
+      {isFolder && !isCollapsed && node.children?.length ? (
+        <div className="graph-explorer__children">
+          {node.children.map((child) => (
+            <ExplorerTreeItem
+              key={`${child.type}-${child.id}`}
+              node={child}
+              level={level + 1}
+              collapsedFolderIds={collapsedFolderIds}
+              treeFocus={treeFocus}
+              treeSelection={treeSelection}
+              onToggleFolder={onToggleFolder}
+              onSelectFolder={onSelectFolder}
+              onSelectFile={onSelectFile}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function GraphCanvas() {
   const [graphData, setGraphData] = useState(null);
   const [baseGraph, setBaseGraph] = useState({ nodes: [], edges: [] });
@@ -1098,6 +1491,11 @@ function GraphCanvas() {
   const [layoutNonce, setLayoutNonce] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState(null);
+  const [treeSelection, setTreeSelection] = useState(null);
+  const [treeFocus, setTreeFocus] = useState(null);
+  const [explorerFilterTerm, setExplorerFilterTerm] = useState('');
+  const [collapsedFolderIds, setCollapsedFolderIds] = useState(() => new Set());
+  const [showExplorer, setShowExplorer] = useState(true);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [isLayouting, setIsLayouting] = useState(false);
@@ -1129,10 +1527,26 @@ function GraphCanvas() {
   const lastEdgeRebuildRef = useRef(0);
   const searchBlurTimerRef = useRef(null);
   const suggestionsRef = useRef(null);
+  const deferredExplorerFilterTerm = useDeferredValue(explorerFilterTerm);
+
+  const scopedGraphData = useMemo(
+    () => filterGraphDataByTreeSelection(graphData, treeSelection),
+    [graphData, treeSelection]
+  );
+
+  const explorerTree = useMemo(
+    () => buildExplorerTree(graphData),
+    [graphData]
+  );
+
+  const filteredExplorerTree = useMemo(
+    () => (explorerTree ? filterExplorerTree(explorerTree.root, deferredExplorerFilterTerm) : null),
+    [deferredExplorerFilterTerm, explorerTree]
+  );
 
   const searchIndex = useMemo(
-    () => buildSearchIndex(graphData),
-    [graphData]
+    () => buildSearchIndex(scopedGraphData),
+    [scopedGraphData]
   );
 
   const suggestions = useMemo(
@@ -1144,8 +1558,8 @@ function GraphCanvas() {
     if (!activeFilter) {
       return null;
     }
-    return getConnectedNodeIds(activeFilter.nodeIds, graphData);
-  }, [activeFilter, graphData]);
+    return getConnectedNodeIds(activeFilter.nodeIds, scopedGraphData);
+  }, [activeFilter, scopedGraphData]);
 
   const resetCanvasTransform = useCallback(() => {
     [edgeCanvasRef.current, arrowCanvasRef.current].forEach((canvas) => {
@@ -1289,6 +1703,10 @@ function GraphCanvas() {
       setGraphData(message.data);
       setExpandedNodeIds(new Set());
       setLayoutEngine(normalizeAlgorithm(message.data?.layout?.algorithm));
+      setTreeSelection(null);
+      setTreeFocus(null);
+      setExplorerFilterTerm('');
+      setCollapsedFolderIds(new Set());
     };
 
     window.addEventListener('message', handleMessage);
@@ -1388,7 +1806,7 @@ function GraphCanvas() {
   }, [scheduleRender]);
 
   useEffect(() => {
-    if (!graphData?.nodes?.length) {
+    if (!scopedGraphData?.nodes?.length) {
       setBaseGraph({ nodes: [], edges: [] });
       setNodes([]);
       updateEdgeScene([], [], matchedNodeIds);
@@ -1402,7 +1820,7 @@ function GraphCanvas() {
       setIsLayouting(true);
 
       try {
-        const result = await layoutGraph(graphData, layoutEngine);
+        const result = await layoutGraph(scopedGraphData, layoutEngine);
         if (cancelled) {
           return;
         }
@@ -1433,7 +1851,45 @@ function GraphCanvas() {
     return () => {
       cancelled = true;
     };
-  }, [fitView, getViewport, graphData, layoutEngine, layoutNonce, matchedNodeIds, scheduleRender, setNodes, syncViewportMode, syncZoomLevel, updateEdgeScene]);
+  }, [fitView, getViewport, scopedGraphData, layoutEngine, layoutNonce, matchedNodeIds, scheduleRender, setNodes, syncViewportMode, syncZoomLevel, updateEdgeScene]);
+
+  const handleNodeFocusInTree = useCallback((node) => {
+    if (!explorerTree) {
+      return;
+    }
+
+    const filePath = node.filePath ?? node.data?.filePath ?? node.id;
+    const label = node.label ?? node.data?.label ?? getBaseName(node.id);
+
+    setShowExplorer(true);
+    setTreeFocus({
+      type: 'file',
+      nodeId: node.id,
+      path: filePath,
+      label,
+    });
+
+    const ancestorPaths = getAncestorFolderPaths(filePath, explorerTree.root.path);
+    setCollapsedFolderIds((current) => {
+      const next = new Set(current);
+      ancestorPaths.forEach((folderPath) => next.delete(folderPath));
+      return next;
+    });
+  }, [explorerTree]);
+
+  useEffect(() => {
+    if (!showExplorer || !treeFocus) {
+      return;
+    }
+
+    const selector = treeFocus.type === 'file'
+      ? `[data-tree-node-id="${CSS.escape(treeFocus.nodeId)}"]`
+      : `[data-tree-path="${CSS.escape(treeFocus.path)}"]`;
+    const target = document.querySelector(selector);
+    if (target) {
+      target.scrollIntoView({ block: 'nearest' });
+    }
+  }, [showExplorer, treeFocus, filteredExplorerTree]);
 
   const handleToggleExpand = useCallback((nodeId) => {
     setExpandedNodeIds((currentIds) => {
@@ -1464,6 +1920,7 @@ function GraphCanvas() {
         matchedNodeIds,
         expandedNodeIds,
         handleToggleExpand,
+        handleNodeFocusInTree,
         lowDetailMode,
         isViewportMoving
       );
@@ -1471,7 +1928,7 @@ function GraphCanvas() {
       updateEdgeScene(nextNodes, baseGraph.edges, matchedNodeIds);
       return nextNodes;
     });
-  }, [baseGraph, expandedNodeIds, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, setNodes, updateEdgeScene]);
+  }, [baseGraph, expandedNodeIds, handleNodeFocusInTree, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, setNodes, updateEdgeScene]);
 
   // Edge scene is rebuilt by the decoration effect above and by handleNodesChange during drag.
   // No separate nodes-change effect needed — it caused double rebuilds on every drag frame.
@@ -1547,8 +2004,16 @@ function GraphCanvas() {
     scheduleRender();
   };
 
-  const totalNodes = graphData?.nodes?.length ?? 0;
+  const totalNodes = scopedGraphData?.nodes?.length ?? 0;
+  const visibleNodes = scopedGraphData?.nodes?.length ?? 0;
   const matchedCount = matchedNodeIds ? matchedNodeIds.size : totalNodes;
+
+  const clearSearchState = useCallback(() => {
+    setActiveFilter(null);
+    setSearchTerm('');
+    setShowSuggestions(false);
+    setHighlightedIndex(-1);
+  }, []);
 
   const handleSearchChange = useCallback((event) => {
     const value = event.target.value;
@@ -1569,10 +2034,61 @@ function GraphCanvas() {
   }, []);
 
   const handleClearFilter = useCallback(() => {
-    setActiveFilter(null);
-    setSearchTerm('');
-    setShowSuggestions(false);
-    setHighlightedIndex(-1);
+    clearSearchState();
+  }, [clearSearchState]);
+
+  const handleSelectTreeFolder = useCallback((folderNode) => {
+    setTreeSelection({
+      type: 'folder',
+      path: folderNode.path,
+      label: folderNode.label,
+    });
+    setTreeFocus({
+      type: 'folder',
+      path: folderNode.path,
+      label: folderNode.label,
+    });
+    clearSearchState();
+  }, [clearSearchState]);
+
+  const handleSelectTreeFile = useCallback((fileNode) => {
+    setTreeSelection({
+      type: 'file',
+      nodeId: fileNode.nodeId,
+      path: fileNode.path,
+      label: fileNode.label,
+    });
+    setTreeFocus({
+      type: 'file',
+      nodeId: fileNode.nodeId,
+      path: fileNode.path,
+      label: fileNode.label,
+    });
+    clearSearchState();
+  }, [clearSearchState]);
+
+  const handleClearTreeSelection = useCallback(() => {
+    setTreeSelection(null);
+  }, []);
+
+  const handleToggleFolder = useCallback((folderPath) => {
+    setCollapsedFolderIds((current) => {
+      const next = new Set(current);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleExplorerFilterChange = useCallback((event) => {
+    setExplorerFilterTerm(event.target.value);
+  }, []);
+
+  const handleClearExplorerFilter = useCallback(() => {
+    setExplorerFilterTerm('');
   }, []);
 
   const handleSearchFocus = useCallback(() => {
@@ -1639,6 +2155,13 @@ function GraphCanvas() {
         </div>
         <div className="graph-toolbar__divider" />
         <div className="graph-toolbar__group">
+          <button
+            type="button"
+            className="graph-button graph-button--secondary"
+            onClick={() => setShowExplorer((value) => !value)}
+          >
+            {showExplorer ? 'Hide Tree' : 'Show Tree'}
+          </button>
           <button type="button" className="graph-button graph-button--secondary" onClick={handleResetViewport}>
             Reset
           </button>
@@ -1706,19 +2229,95 @@ function GraphCanvas() {
       </div>
 
       <div className="graph-stats">
-        <div className="graph-stat"><span>Nodes</span><strong>{graphData?.nodes?.length ?? 0}</strong></div>
-        <div className="graph-stat"><span>Edges</span><strong>{graphData?.edges?.length ?? 0}</strong></div>
+        <div className="graph-stat"><span>Nodes</span><strong>{visibleNodes}</strong></div>
+        <div className="graph-stat"><span>Edges</span><strong>{scopedGraphData?.edges?.length ?? 0}</strong></div>
         <div className="graph-stat"><span>Zoom</span><strong>{zoomLevel}%</strong></div>
         <div className="graph-stat"><span>Renderer</span><strong>{rendererMode}</strong></div>
       </div>
+
+      {showExplorer && explorerTree ? (
+        <aside className="graph-explorer">
+          <div className="graph-explorer__header">
+            <div className="graph-explorer__title">
+              <span>Scope</span>
+              <strong title={explorerTree.root.path || explorerTree.root.label}>{explorerTree.root.label}</strong>
+            </div>
+            <button
+              type="button"
+              className="graph-explorer__close"
+              onClick={() => setShowExplorer(false)}
+              aria-label="Hide explorer"
+            >
+              ✕
+            </button>
+          </div>
+          {treeSelection ? (
+            <div className="graph-explorer__selection">
+              <span className="graph-explorer__selection-label" title={treeSelection.path}>{treeSelection.label}</span>
+              <button
+                type="button"
+                className="graph-explorer__selection-clear"
+                onClick={handleClearTreeSelection}
+              >
+                Show All
+              </button>
+            </div>
+          ) : (
+            <div className="graph-explorer__selection graph-explorer__selection--muted">
+              Select a folder or file to scope the graph
+            </div>
+          )}
+          <div className="graph-explorer__filter">
+            <div className="graph-explorer__filter-input-wrap">
+              <input
+                type="text"
+                className="graph-explorer__filter-input"
+                value={explorerFilterTerm}
+                onChange={handleExplorerFilterChange}
+                placeholder="Filter files and folders"
+              />
+              {explorerFilterTerm ? (
+                <button
+                  type="button"
+                  className="graph-explorer__filter-clear"
+                  onClick={handleClearExplorerFilter}
+                  aria-label="Clear explorer filter"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <div className="graph-explorer__body">
+            {filteredExplorerTree ? (
+              <ExplorerTreeItem
+                node={filteredExplorerTree}
+                level={0}
+                collapsedFolderIds={collapsedFolderIds}
+                treeFocus={treeFocus}
+                treeSelection={treeSelection}
+                onToggleFolder={handleToggleFolder}
+                onSelectFolder={handleSelectTreeFolder}
+                onSelectFile={handleSelectTreeFile}
+              />
+            ) : (
+              <div className="graph-explorer__empty">No matching files or folders</div>
+            )}
+          </div>
+        </aside>
+      ) : null}
 
       {isLayouting ? (
         <div className="graph-status">Computing layout...</div>
       ) : null}
 
-      {graphData && totalNodes === 0 ? (
+      {graphData && visibleNodes === 0 ? (
         <div className="graph-empty">
-          <div className="graph-empty__card">No analyzable files were found for this workspace.</div>
+          <div className="graph-empty__card">
+            {treeSelection
+              ? 'No related nodes were found for the selected scope.'
+              : 'No analyzable files were found for this workspace.'}
+          </div>
         </div>
       ) : null}
 
@@ -1753,6 +2352,9 @@ function GraphCanvas() {
               type: 'nodeClicked',
               data: { nodeId: node.id },
             });
+          }}
+          onNodeClick={(_, node) => {
+            handleNodeFocusInTree(node);
           }}
           fitView
           minZoom={0.1}

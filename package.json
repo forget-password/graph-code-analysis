@@ -30,7 +30,6 @@
           "type": "array",
           "default": [
             "**/node_modules/**",
-            "**/dist/**",
             "**/build/**",
             "**/.git/**"
           ],

@@ -38,7 +38,6 @@ Configure the extension in your VSCode settings:
 {
   "codeAnalysis.excludePatterns": [
     "**/node_modules/**",
-    "**/dist/**",
     "**/build/**",
     "**/.git/**"
   ],
