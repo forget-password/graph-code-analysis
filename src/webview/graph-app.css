@@ -108,6 +108,16 @@ body {
   gap: 8px;
 }
 
+.graph-search--explorer {
+  position: static;
+  z-index: auto;
+  min-width: 0;
+  max-width: none;
+  width: 100%;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
 .graph-search__input-wrap {
   position: relative;
   display: flex;
@@ -830,6 +840,10 @@ body {
   color: var(--graph-muted);
   border-color: color-mix(in srgb, var(--graph-border) 76%, transparent);
   background: color-mix(in srgb, var(--graph-surface) 88%, transparent);
+}
+
+.graph-explorer__scope {
+  padding: 12px 14px 0;
 }
 
 .graph-explorer__selection-label {

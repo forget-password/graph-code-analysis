@@ -201,6 +201,8 @@ function buildSearchIndex(graphData) {
       type: 'file',
       label: node.label,
       detail: node.filePath,
+      path: node.filePath,
+      nodeId: node.id,
       nodeIds: [node.id],
     });
 
@@ -218,6 +220,9 @@ function buildSearchIndex(graphData) {
         type: 'symbol',
         label: element.name,
         detail: `${element.kind} · ${node.label}`,
+        path: node.filePath,
+        nodeId: node.id,
+        fileLabel: node.label,
         nodeIds: [node.id],
       });
     });
@@ -229,6 +234,7 @@ function buildSearchIndex(graphData) {
       type: 'folder',
       label: parts[parts.length - 1] || folderPath,
       detail: `${folderPath} · ${nodeIds.length} files`,
+      path: folderPath,
       nodeIds,
     });
   });
@@ -2015,6 +2021,24 @@ function GraphCanvas() {
     setHighlightedIndex(-1);
   }, []);
 
+  const revealTreeSelection = useCallback((selection) => {
+    setShowExplorer(true);
+    setTreeSelection(selection);
+    setTreeFocus(selection);
+    clearSearchState();
+
+    if (!explorerTree) {
+      return;
+    }
+
+    const ancestorPaths = getAncestorFolderPaths(selection.path, explorerTree.root.path);
+    setCollapsedFolderIds((current) => {
+      const next = new Set(current);
+      ancestorPaths.forEach((folderPath) => next.delete(folderPath));
+      return next;
+    });
+  }, [clearSearchState, explorerTree]);
+
   const handleSearchChange = useCallback((event) => {
     const value = event.target.value;
     setSearchTerm(value);
@@ -2027,45 +2051,45 @@ function GraphCanvas() {
   }, []);
 
   const handleSelectSuggestion = useCallback((suggestion) => {
-    setActiveFilter(suggestion);
-    setSearchTerm(suggestion.label);
-    setShowSuggestions(false);
-    setHighlightedIndex(-1);
-  }, []);
+    if (suggestion.type === 'folder' && suggestion.path) {
+      revealTreeSelection({
+        type: 'folder',
+        path: suggestion.path,
+        label: suggestion.label,
+      });
+      return;
+    }
+
+    if (suggestion.path && suggestion.nodeId) {
+      revealTreeSelection({
+        type: 'file',
+        nodeId: suggestion.nodeId,
+        path: suggestion.path,
+        label: suggestion.fileLabel ?? suggestion.label,
+      });
+    }
+  }, [revealTreeSelection]);
 
   const handleClearFilter = useCallback(() => {
     clearSearchState();
   }, [clearSearchState]);
 
   const handleSelectTreeFolder = useCallback((folderNode) => {
-    setTreeSelection({
+    revealTreeSelection({
       type: 'folder',
       path: folderNode.path,
       label: folderNode.label,
     });
-    setTreeFocus({
-      type: 'folder',
-      path: folderNode.path,
-      label: folderNode.label,
-    });
-    clearSearchState();
-  }, [clearSearchState]);
+  }, [revealTreeSelection]);
 
   const handleSelectTreeFile = useCallback((fileNode) => {
-    setTreeSelection({
+    revealTreeSelection({
       type: 'file',
       nodeId: fileNode.nodeId,
       path: fileNode.path,
       label: fileNode.label,
     });
-    setTreeFocus({
-      type: 'file',
-      nodeId: fileNode.nodeId,
-      path: fileNode.path,
-      label: fileNode.label,
-    });
-    clearSearchState();
-  }, [clearSearchState]);
+  }, [revealTreeSelection]);
 
   const handleClearTreeSelection = useCallback(() => {
     setTreeSelection(null);
@@ -2171,63 +2195,6 @@ function GraphCanvas() {
         </div>
       </div>
 
-      <div className="graph-search">
-        {activeFilter ? (
-          <div className="graph-search__active-filter">
-            <span className="graph-search__filter-icon">{SEARCH_TYPE_ICONS[activeFilter.type]}</span>
-            <span className="graph-search__filter-label" title={activeFilter.detail}>{activeFilter.label}</span>
-            <span className="graph-search__filter-count">{matchedCount} nodes</span>
-            <button
-              type="button"
-              className="graph-search__filter-clear"
-              onClick={handleClearFilter}
-            >
-              ✕
-            </button>
-          </div>
-        ) : null}
-        <div className="graph-search__input-wrap">
-          <input
-            className="graph-search__input"
-            type="text"
-            value={searchTerm}
-            placeholder={activeFilter ? 'Refine search...' : 'Search files, folders, or symbols'}
-            onChange={handleSearchChange}
-            onFocus={handleSearchFocus}
-            onBlur={handleSearchBlur}
-            onKeyDown={handleSearchKeyDown}
-          />
-          {searchTerm && !activeFilter ? (
-            <button type="button" className="graph-search__input-clear" onClick={handleClearFilter}>✕</button>
-          ) : null}
-        </div>
-        {showSuggestions && suggestions.length > 0 ? (
-          <div ref={suggestionsRef} className="graph-search__dropdown">
-            {suggestions.map((item, index) => (
-              <button
-                key={`${item.type}-${item.label}-${index}`}
-                type="button"
-                className={`graph-search__suggestion ${index === highlightedIndex ? 'graph-search__suggestion--active' : ''}`}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  handleSelectSuggestion(item);
-                }}
-                onMouseEnter={() => setHighlightedIndex(index)}
-              >
-                <span className="graph-search__suggestion-icon">{SEARCH_TYPE_ICONS[item.type]}</span>
-                <span className="graph-search__suggestion-label">{item.label}</span>
-                <span className="graph-search__suggestion-detail">{item.detail}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {showSuggestions && searchTerm.trim() && suggestions.length === 0 ? (
-          <div className="graph-search__dropdown">
-            <div className="graph-search__no-results">No results found</div>
-          </div>
-        ) : null}
-      </div>
-
       <div className="graph-stats">
         <div className="graph-stat"><span>Nodes</span><strong>{visibleNodes}</strong></div>
         <div className="graph-stat"><span>Edges</span><strong>{scopedGraphData?.edges?.length ?? 0}</strong></div>
@@ -2250,6 +2217,64 @@ function GraphCanvas() {
             >
               ✕
             </button>
+          </div>
+          <div className="graph-explorer__scope">
+            <div className="graph-search graph-search--explorer">
+              {activeFilter ? (
+                <div className="graph-search__active-filter">
+                  <span className="graph-search__filter-icon">{SEARCH_TYPE_ICONS[activeFilter.type]}</span>
+                  <span className="graph-search__filter-label" title={activeFilter.detail}>{activeFilter.label}</span>
+                  <span className="graph-search__filter-count">{matchedCount} nodes</span>
+                  <button
+                    type="button"
+                    className="graph-search__filter-clear"
+                    onClick={handleClearFilter}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : null}
+              <div className="graph-search__input-wrap">
+                <input
+                  className="graph-search__input"
+                  type="text"
+                  value={searchTerm}
+                  placeholder={activeFilter ? 'Refine search...' : 'Search files, folders, or symbols'}
+                  onChange={handleSearchChange}
+                  onFocus={handleSearchFocus}
+                  onBlur={handleSearchBlur}
+                  onKeyDown={handleSearchKeyDown}
+                />
+                {searchTerm && !activeFilter ? (
+                  <button type="button" className="graph-search__input-clear" onClick={handleClearFilter}>✕</button>
+                ) : null}
+              </div>
+              {showSuggestions && suggestions.length > 0 ? (
+                <div ref={suggestionsRef} className="graph-search__dropdown">
+                  {suggestions.map((item, index) => (
+                    <button
+                      key={`${item.type}-${item.label}-${index}`}
+                      type="button"
+                      className={`graph-search__suggestion ${index === highlightedIndex ? 'graph-search__suggestion--active' : ''}`}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        handleSelectSuggestion(item);
+                      }}
+                      onMouseEnter={() => setHighlightedIndex(index)}
+                    >
+                      <span className="graph-search__suggestion-icon">{SEARCH_TYPE_ICONS[item.type]}</span>
+                      <span className="graph-search__suggestion-label">{item.label}</span>
+                      <span className="graph-search__suggestion-detail">{item.detail}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {showSuggestions && searchTerm.trim() && suggestions.length === 0 ? (
+                <div className="graph-search__dropdown">
+                  <div className="graph-search__no-results">No results found</div>
+                </div>
+              ) : null}
+            </div>
           </div>
           {treeSelection ? (
             <div className="graph-explorer__selection">
