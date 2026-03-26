@@ -445,121 +445,11 @@ function buildOrthogonalRoute(sourceNode, targetNode) {
   ]);
 }
 
-function mergeIntervals(intervals) {
-  if (intervals.length === 0) {
-    return [];
-  }
-
-  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
-  const merged = [[sorted[0][0], sorted[0][1]]];
-
-  for (let index = 1; index < sorted.length; index += 1) {
-    const current = sorted[index];
-    const last = merged[merged.length - 1];
-
-    if (current[0] <= last[1]) {
-      last[1] = Math.max(last[1], current[1]);
-    } else {
-      merged.push([current[0], current[1]]);
-    }
-  }
-
-  return merged;
-}
-
-function splitAxisAlignedSegmentForNodes(segment, nodes, ignoredNodeIds) {
-  const horizontal = Math.abs(segment.y1 - segment.y2) < 0.1;
-  const intervals = [];
-
-  nodes.forEach((node) => {
-    if (ignoredNodeIds.has(node.id)) {
-      return;
-    }
-
-    const left = node.x;
-    const right = node.x + node.width;
-    const top = node.y;
-    const bottom = node.y + node.height;
-
-    if (horizontal) {
-      if (segment.y1 <= top || segment.y1 >= bottom) {
-        return;
-      }
-
-      const from = Math.max(Math.min(segment.x1, segment.x2), left);
-      const to = Math.min(Math.max(segment.x1, segment.x2), right);
-      if (to > from) {
-        intervals.push([from, to]);
-      }
-      return;
-    }
-
-    if (segment.x1 <= left || segment.x1 >= right) {
-      return;
-    }
-
-    const from = Math.max(Math.min(segment.y1, segment.y2), top);
-    const to = Math.min(Math.max(segment.y1, segment.y2), bottom);
-    if (to > from) {
-      intervals.push([from, to]);
-    }
-  });
-
-  const merged = mergeIntervals(intervals);
-  if (merged.length === 0) {
-    return { solid: [segment], dashed: [] };
-  }
-
-  const ascendingStart = horizontal ? Math.min(segment.x1, segment.x2) : Math.min(segment.y1, segment.y2);
-  const ascendingEnd = horizontal ? Math.max(segment.x1, segment.x2) : Math.max(segment.y1, segment.y2);
-  let cursor = ascendingStart;
-  const solid = [];
-  const dashed = [];
-
-  merged.forEach(([from, to]) => {
-    if (from > cursor) {
-      solid.push(horizontal
-        ? { ...segment, x1: cursor, x2: from }
-        : { ...segment, y1: cursor, y2: from });
-    }
-
-    dashed.push(horizontal
-      ? { ...segment, x1: from, x2: to }
-      : { ...segment, y1: from, y2: to });
-    cursor = to;
-  });
-
-  if (cursor < ascendingEnd) {
-    solid.push(horizontal
-      ? { ...segment, x1: cursor, x2: ascendingEnd }
-      : { ...segment, y1: cursor, y2: ascendingEnd });
-  }
-
-  const reverseIfNeeded = (part) => {
-    if (horizontal && segment.x1 > segment.x2) {
-      return { ...part, x1: part.x2, x2: part.x1 };
-    }
-
-    if (!horizontal && segment.y1 > segment.y2) {
-      return { ...part, y1: part.y2, y2: part.y1 };
-    }
-
-    return part;
-  };
-
-  return {
-    solid: solid.map(reverseIfNeeded),
-    dashed: dashed.map(reverseIfNeeded),
-  };
-}
-
 function buildEdgeScene(nodes, edges, matchedNodeIds) {
   const nodeMap = new Map(nodes.map((node) => [node.id, toWorldNode(node)]));
   const hasSearch = matchedNodeIds !== null;
   const segments = [];
-  const dashedSegments = [];
   const arrows = [];
-  const worldNodes = nodes.map(toWorldNode);
 
   edges.forEach((edge) => {
     const sourceNode = nodeMap.get(edge.source);
@@ -577,17 +467,14 @@ function buildEdgeScene(nodes, edges, matchedNodeIds) {
     for (let index = 1; index < route.length; index += 1) {
       const previous = route[index - 1];
       const current = route[index];
-      const split = splitAxisAlignedSegmentForNodes({
+      segments.push({
         x1: previous.x,
         y1: previous.y,
         x2: current.x,
         y2: current.y,
         color,
         thickness: dimmed ? 1.1 : edge.strokeWidth,
-      }, worldNodes, new Set([edge.source, edge.target]));
-
-      segments.push(...split.solid);
-      dashedSegments.push(...split.dashed);
+      });
     }
 
     if (route.length >= 2) {
@@ -599,7 +486,7 @@ function buildEdgeScene(nodes, edges, matchedNodeIds) {
     }
   });
 
-  return { segments, dashedSegments, arrows };
+  return { segments, arrows };
 }
 
 function buildEdgeInstanceData(segments) {
@@ -624,13 +511,6 @@ function buildEdgeInstanceData(segments) {
   return data;
 }
 
-function screenToWorld(point, viewport) {
-  return {
-    x: (point.x - viewport.x) / viewport.zoom,
-    y: (point.y - viewport.y) / viewport.zoom,
-  };
-}
-
 function worldToScreen(point, viewport) {
   return {
     x: (point.x * viewport.zoom) + viewport.x,
@@ -638,25 +518,28 @@ function worldToScreen(point, viewport) {
   };
 }
 
-function drawArrowOverlay(context, overlayScene, viewport, size, dpr) {
+function getViewportBitmapTransform(renderedViewport, nextViewport) {
+  const scale = nextViewport.zoom / renderedViewport.zoom;
+
+  return {
+    scale,
+    x: nextViewport.x - (renderedViewport.x * scale),
+    y: nextViewport.y - (renderedViewport.y * scale),
+  };
+}
+
+function drawArrowOverlay(context, overlayScene, viewport, size, dpr, interacting) {
   context.save();
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, size.width, size.height);
 
+  if (interacting) {
+    context.restore();
+    return;
+  }
+
   context.lineCap = 'round';
   context.lineJoin = 'round';
-  context.setLineDash([8, 6]);
-  overlayScene.dashedSegments.forEach((segment) => {
-    const start = worldToScreen({ x: segment.x1, y: segment.y1 }, viewport);
-    const end = worldToScreen({ x: segment.x2, y: segment.y2 }, viewport);
-    context.beginPath();
-    context.strokeStyle = rgbaToCss(segment.color);
-    context.lineWidth = Math.max(1, segment.thickness * viewport.zoom);
-    context.moveTo(start.x, start.y);
-    context.lineTo(end.x, end.y);
-    context.stroke();
-  });
-  context.setLineDash([]);
 
   overlayScene.arrows.forEach((arrow) => {
     const start = worldToScreen(arrow.start, viewport);
@@ -696,8 +579,8 @@ function createCanvas2dEdgeRenderer(canvas) {
   return {
     mode: 'canvas2d',
     resize() {},
-    updateScene(scene) {
-      segments = scene.segments;
+    updateScene(nextScene) {
+      segments = nextScene.segments;
     },
     render({ viewport, size, dpr }) {
       if (!context) {
@@ -920,10 +803,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
         alphaMode: 'premultiplied',
       });
     },
-    updateScene(scene) {
-      const data = buildEdgeInstanceData(scene.segments);
+    updateScene(nextScene) {
+      const data = buildEdgeInstanceData(nextScene.segments);
       ensureBuffer(data.byteLength || 4);
-      count = scene.segments.length;
+      count = nextScene.segments.length;
 
       if (data.byteLength > 0) {
         device.queue.writeBuffer(instanceBuffer, 0, data);
@@ -1105,8 +988,11 @@ function GraphCanvas() {
   const arrowCanvasRef = useRef(null);
   const rendererRef = useRef(null);
   const viewportRef = useRef({ x: 0, y: 0, zoom: 1 });
-  const sceneRef = useRef({ segments: [], dashedSegments: [], arrows: [] });
+  const renderedViewportRef = useRef(null);
+  const sceneRef = useRef({ segments: [], arrows: [] });
   const frameRef = useRef(0);
+  const transformFrameRef = useRef(0);
+  const pendingViewportRef = useRef(null);
   const sizeRef = useRef({ width: 0, height: 0, dpr: 1 });
   const zoomLevelRef = useRef(100);
   const lowDetailModeRef = useRef(false);
@@ -1117,6 +1003,49 @@ function GraphCanvas() {
     () => getMatchedNodeIds(graphData, searchTerm),
     [graphData, searchTerm]
   );
+
+  const resetCanvasTransform = useCallback(() => {
+    [edgeCanvasRef.current, arrowCanvasRef.current].forEach((canvas) => {
+      if (!canvas) {
+        return;
+      }
+
+      canvas.style.transform = 'translate(0px, 0px) scale(1)';
+      canvas.style.opacity = '1';
+    });
+  }, []);
+
+  const applyViewportTransform = useCallback((viewport) => {
+    pendingViewportRef.current = viewport;
+
+    if (transformFrameRef.current) {
+      return;
+    }
+
+    transformFrameRef.current = window.requestAnimationFrame(() => {
+      transformFrameRef.current = 0;
+
+      const nextViewport = pendingViewportRef.current;
+      if (!nextViewport) {
+        return;
+      }
+
+      const renderedViewport = renderedViewportRef.current;
+      const edgeCanvas = edgeCanvasRef.current;
+      const arrowCanvas = arrowCanvasRef.current;
+
+      if (!renderedViewport || !edgeCanvas || !arrowCanvas) {
+        return;
+      }
+
+      const bitmapTransform = getViewportBitmapTransform(renderedViewport, nextViewport);
+      const transform = `translate(${bitmapTransform.x}px, ${bitmapTransform.y}px) scale(${bitmapTransform.scale})`;
+
+      edgeCanvas.style.transform = transform;
+      arrowCanvas.style.transform = transform;
+      arrowCanvas.style.opacity = '0';
+    });
+  }, []);
 
   const scheduleRender = useCallback(() => {
     if (frameRef.current) {
@@ -1145,10 +1074,14 @@ function GraphCanvas() {
         sceneRef.current,
         viewportRef.current,
         sizeRef.current,
-        sizeRef.current.dpr
+        sizeRef.current.dpr,
+        viewportMovingRef.current
       );
+
+      renderedViewportRef.current = { ...viewportRef.current };
+      resetCanvasTransform();
     });
-  }, []);
+  }, [resetCanvasTransform]);
 
   const syncViewportMode = useCallback((viewport) => {
     const nextLowDetailMode = viewport.zoom <= LOW_DETAIL_ZOOM_THRESHOLD;
@@ -1244,6 +1177,10 @@ function GraphCanvas() {
       if (frameRef.current) {
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = 0;
+      }
+      if (transformFrameRef.current) {
+        window.cancelAnimationFrame(transformFrameRef.current);
+        transformFrameRef.current = 0;
       }
       rendererRef.current?.destroy();
       rendererRef.current = null;
@@ -1449,9 +1386,6 @@ function GraphCanvas() {
         </div>
         <div className="graph-toolbar__divider" />
         <div className="graph-toolbar__group">
-          <button type="button" className="graph-button graph-button--secondary" onClick={() => fitView({ padding: 0.18, duration: 220 })}>
-            Fit
-          </button>
           <button type="button" className="graph-button graph-button--secondary" onClick={handleResetViewport}>
             Reset
           </button>
@@ -1501,12 +1435,10 @@ function GraphCanvas() {
           onNodesChange={handleNodesChange}
           nodesDraggable
           onMove={(_, viewport) => {
-            const nextIsZooming = Math.abs(viewport.zoom - viewportZoomRef.current) > 0.0001;
             viewportZoomRef.current = viewport.zoom;
             viewportRef.current = viewport;
-            setViewportMovingState(nextIsZooming);
-            syncViewportMode(viewport);
-            scheduleRender();
+            setViewportMovingState(true);
+            applyViewportTransform(viewport);
           }}
           onMoveEnd={(_, viewport) => {
             setViewportMovingState(false);
@@ -1553,7 +1485,7 @@ function GraphCanvas() {
 
               viewportRef.current = nextViewport;
               setViewport(nextViewport, { duration: 180 });
-              scheduleRender();
+              applyViewportTransform(nextViewport);
             }}
             nodeColor={(node) => (node.data?.isDimmed ? 'rgba(128, 128, 128, 0.32)' : 'rgba(14, 99, 156, 0.85)')}
             nodeStrokeColor={(node) => (node.data?.isDimmed ? 'rgba(145, 145, 145, 0.38)' : 'rgba(208, 238, 255, 0.72)')}
