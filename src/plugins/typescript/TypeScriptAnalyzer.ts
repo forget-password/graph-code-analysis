@@ -3,6 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as ts from 'typescript';
 import { BaseLanguageAnalyzer } from '../base/BaseLanguageAnalyzer';
+import { RawScriptFileInterpreter } from '../script/RawScriptFileInterpreter';
+import { PreparedScriptFile, ScriptFileInterpreter } from '../script/ScriptFileInterpreter';
+import { VueFileInterpreter } from '../script/VueFileInterpreter';
 import {
     CodeElement,
     CodeElementKind,
@@ -12,26 +15,41 @@ import {
 } from '../../core/types';
 
 /**
- * TypeScript/JavaScript 分析器
+ * TypeScript/JavaScript 系脚本分析器
+ * 通过文件解释器兼容普通脚本和 Vue SFC
  */
 export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
     readonly id = 'typescript';
     readonly name = 'TypeScript/JavaScript Analyzer';
-    readonly supportedExtensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    readonly supportedExtensions: string[];
     private readonly resolvedImportCache: Map<string, string | null> = new Map();
     private readonly fileExistsCache: Map<string, boolean> = new Map();
+    private readonly projectRootCache: Map<string, string | null> = new Map();
+    private readonly interpreters: ScriptFileInterpreter[] = [
+        new VueFileInterpreter(),
+        new RawScriptFileInterpreter(),
+    ];
+
+    constructor() {
+        super();
+        this.supportedExtensions = Array.from(
+            new Set(this.interpreters.flatMap((interpreter) => interpreter.supportedExtensions))
+        );
+    }
 
     async analyzeFile(
         filePath: string,
         content: string
     ): Promise<FileAnalysisResult> {
+        const preparedFile = this.prepareFile(filePath, content);
         const sourceFile = ts.createSourceFile(
             filePath,
-            content,
+            preparedFile.content,
             ts.ScriptTarget.Latest,
-            true
+            true,
+            preparedFile.scriptKind
         );
-        const elements = this.parseWithTypeScript(filePath, content, sourceFile);
+        const elements = this.collectElements(filePath, preparedFile, sourceFile);
         const imports = await this.analyzeImports(sourceFile, filePath);
         const exports = elements.filter((element) => element.isExported);
 
@@ -44,78 +62,16 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
         };
     }
 
-    /**
-     * 转换 VSCode 符号为代码元素
-     */
-    private convertSymbolToElement(
-        symbol: vscode.DocumentSymbol,
-        filePath: string
-    ): CodeElement {
-        return {
-            id: this.generateId(filePath, symbol.name, this.mapSymbolKind(symbol.kind)),
-            name: symbol.name,
-            kind: this.mapSymbolKind(symbol.kind),
-            range: symbol.range,
-            filePath,
-            signature: symbol.detail,
-            children: symbol.children?.map((child) => this.convertSymbolToElement(child, filePath)),
-        };
-    }
+    private prepareFile(filePath: string, content: string): PreparedScriptFile {
+        const interpreter = this.interpreters.find((candidate) =>
+            candidate.canInterpret(filePath, content)
+        );
 
-    /**
-     * 映射 VSCode 符号类型到自定义类型
-     */
-    private mapSymbolKind(kind: vscode.SymbolKind): CodeElementKind {
-        switch (kind) {
-            case vscode.SymbolKind.Class:
-                return CodeElementKind.Class;
-            case vscode.SymbolKind.Interface:
-                return CodeElementKind.Interface;
-            case vscode.SymbolKind.Function:
-                return CodeElementKind.Function;
-            case vscode.SymbolKind.Method:
-                return CodeElementKind.Method;
-            case vscode.SymbolKind.Variable:
-                return CodeElementKind.Variable;
-            case vscode.SymbolKind.Constant:
-                return CodeElementKind.Constant;
-            case vscode.SymbolKind.Property:
-                return CodeElementKind.Property;
-            case vscode.SymbolKind.Enum:
-                return CodeElementKind.Enum;
-            case vscode.SymbolKind.Module:
-            case vscode.SymbolKind.Namespace:
-                return CodeElementKind.Module;
-            default:
-                return CodeElementKind.Variable;
+        if (interpreter) {
+            return interpreter.prepare(filePath, content);
         }
-    }
 
-    /**
-     * 处理子符号
-     */
-    private processChildren(
-        children: vscode.DocumentSymbol[],
-        filePath: string,
-        elements: CodeElement[]
-    ): void {
-        for (const child of children) {
-            const element = this.convertSymbolToElement(child, filePath);
-            elements.push(element);
-
-            if (child.children) {
-                this.processChildren(child.children, filePath, elements);
-            }
-        }
-    }
-
-    /**
-     * 检查符号是否导出
-     */
-    private isExported(symbol: vscode.DocumentSymbol, document: vscode.TextDocument): boolean {
-        const line = document.lineAt(symbol.range.start.line);
-        const text = line.text;
-        return text.includes('export');
+        return new RawScriptFileInterpreter().prepare(filePath, content);
     }
 
     /**
@@ -175,42 +131,92 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
     }
 
     /**
-   * 解析导入路径
-   */
+     * 解析导入路径
+     */
     private async resolveImportPath(importPath: string, currentFile: string): Promise<string | null> {
-        // 跳过 node_modules 导入
-        if (!importPath.startsWith('.')) {
-            return null;
-        }
-
         const cacheKey = `${currentFile}::${importPath}`;
         if (this.resolvedImportCache.has(cacheKey)) {
             return this.resolvedImportCache.get(cacheKey) ?? null;
         }
 
-        const currentDir = path.dirname(currentFile);
-        const resolvedPath = path.resolve(currentDir, importPath);
-        const candidates: string[] = [];
-        const resolvedExt = path.extname(resolvedPath).toLowerCase();
+        const basePaths = await this.resolveImportBasePaths(importPath, currentFile);
 
-        if (this.supportedExtensions.includes(resolvedExt)) {
-            candidates.push(resolvedPath);
-        }
+        for (const basePath of basePaths) {
+            const candidates: string[] = [];
+            const resolvedExt = path.extname(basePath).toLowerCase();
 
-        this.supportedExtensions.forEach((ext) => {
-            candidates.push(`${resolvedPath}${ext}`);
-            candidates.push(path.join(resolvedPath, `index${ext}`));
-        });
+            if (this.supportedExtensions.includes(resolvedExt)) {
+                candidates.push(basePath);
+            }
 
-        for (const candidate of candidates) {
-            if (await this.fileExists(candidate)) {
-                this.resolvedImportCache.set(cacheKey, candidate);
-                return candidate;
+            this.supportedExtensions.forEach((ext) => {
+                candidates.push(`${basePath}${ext}`);
+                candidates.push(path.join(basePath, `index${ext}`));
+            });
+
+            for (const candidate of candidates) {
+                if (await this.fileExists(candidate)) {
+                    this.resolvedImportCache.set(cacheKey, candidate);
+                    return candidate;
+                }
             }
         }
 
         this.resolvedImportCache.set(cacheKey, null);
         return null;
+    }
+
+    private async resolveImportBasePaths(importPath: string, currentFile: string): Promise<string[]> {
+        const currentDir = path.dirname(currentFile);
+
+        if (importPath.startsWith('.')) {
+            return [path.resolve(currentDir, importPath)];
+        }
+
+        const projectRoot = await this.findProjectRoot(currentFile);
+        if (!projectRoot) {
+            return [];
+        }
+
+        if (importPath.startsWith('@/')) {
+            return [path.join(projectRoot, 'src', importPath.slice(2))];
+        }
+
+        if (importPath.startsWith('~/')) {
+            return [path.join(projectRoot, importPath.slice(2))];
+        }
+
+        return [];
+    }
+
+    private async findProjectRoot(filePath: string): Promise<string | null> {
+        let currentDir = path.dirname(filePath);
+        const visitedDirs: string[] = [];
+
+        while (true) {
+            if (this.projectRootCache.has(currentDir)) {
+                const cached = this.projectRootCache.get(currentDir) ?? null;
+                visitedDirs.forEach((dir) => this.projectRootCache.set(dir, cached));
+                return cached;
+            }
+
+            visitedDirs.push(currentDir);
+
+            for (const marker of ['package.json', 'tsconfig.json', 'jsconfig.json', '.git']) {
+                if (await this.fileExists(path.join(currentDir, marker))) {
+                    visitedDirs.forEach((dir) => this.projectRootCache.set(dir, currentDir));
+                    return currentDir;
+                }
+            }
+
+            const parentDir = path.dirname(currentDir);
+            if (parentDir === currentDir) {
+                visitedDirs.forEach((dir) => this.projectRootCache.set(dir, null));
+                return null;
+            }
+
+            currentDir = parentDir;
+        }
     }
 
     private createImportDependency(filePath: string, resolvedPath: string): Dependency {
@@ -248,30 +254,24 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
             return false;
         }
     }
+
     /**
      * 使用 TypeScript 编译器 API 解析文件
      */
-    private parseWithTypeScript(
+    private collectElements(
         filePath: string,
-        content: string,
-        existingSourceFile?: ts.SourceFile
+        preparedFile: PreparedScriptFile,
+        sourceFile: ts.SourceFile
     ): CodeElement[] {
         const elements: CodeElement[] = [];
-        const sourceFile = existingSourceFile || ts.createSourceFile(
-            filePath,
-            content,
-            ts.ScriptTarget.Latest,
-            true
-        );
 
         const visit = (node: ts.Node) => {
             let element: CodeElement | null = null;
             let isExported = false;
 
-            // 检查是否导出
             if (ts.canHaveModifiers(node)) {
                 const modifiers = ts.getModifiers(node);
-                isExported = modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword) || false;
+                isExported = modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) || false;
             }
 
             switch (node.kind) {
@@ -317,9 +317,10 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
                 }
                 case ts.SyntaxKind.MethodDeclaration: {
                     const methodNode = node as ts.MethodDeclaration;
-                    if (ts.isIdentifier(methodNode.name)) {
+                    const methodName = this.getPropertyNameText(methodNode.name);
+                    if (methodName) {
                         element = this.createCodeElement(
-                            methodNode.name.text,
+                            methodName,
                             CodeElementKind.Method,
                             methodNode,
                             sourceFile,
@@ -332,27 +333,32 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
                 case ts.SyntaxKind.VariableStatement: {
                     const varStmt = node as ts.VariableStatement;
                     for (const decl of varStmt.declarationList.declarations) {
-                        if (ts.isIdentifier(decl.name)) {
-                            const kind = varStmt.declarationList.flags & ts.NodeFlags.Const
-                                ? CodeElementKind.Constant
-                                : CodeElementKind.Variable;
-
-                            const varElement = this.createCodeElement(
-                                decl.name.text,
-                                kind,
-                                decl,
-                                sourceFile,
-                                filePath,
-                                isExported
-                            );
-
-                            // Check for object literal initializer
-                            if (decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
-                                varElement.children = this.getObjectLiteralProperties(decl.initializer, sourceFile, filePath);
-                            }
-
-                            elements.push(varElement);
+                        if (!ts.isIdentifier(decl.name)) {
+                            continue;
                         }
+
+                        const kind = varStmt.declarationList.flags & ts.NodeFlags.Const
+                            ? CodeElementKind.Constant
+                            : CodeElementKind.Variable;
+
+                        const varElement = this.createCodeElement(
+                            decl.name.text,
+                            kind,
+                            decl,
+                            sourceFile,
+                            filePath,
+                            isExported
+                        );
+
+                        if (decl.initializer && ts.isObjectLiteralExpression(decl.initializer)) {
+                            varElement.children = this.getObjectLiteralProperties(
+                                decl.initializer,
+                                sourceFile,
+                                filePath
+                            );
+                        }
+
+                        elements.push(varElement);
                     }
                     break;
                 }
@@ -382,50 +388,414 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
                     );
                     break;
                 }
+                case ts.SyntaxKind.ExportAssignment: {
+                    element = this.createVueComponentElement(
+                        node as ts.ExportAssignment,
+                        filePath,
+                        preparedFile,
+                        sourceFile
+                    );
+                    break;
+                }
             }
 
             if (element) {
-                // 如果是容器类型，递归查找子节点
-                if ([ts.SyntaxKind.ClassDeclaration, ts.SyntaxKind.ModuleDeclaration, ts.SyntaxKind.InterfaceDeclaration, ts.SyntaxKind.EnumDeclaration].includes(node.kind)) {
-                    const children: CodeElement[] = [];
-                    ts.forEachChild(node, (child) => {
-                        // 简单的递归逻辑：对于子节点，我们需要将其添加到当前元素的 children 中
-                        // 这里我们需要稍微调整 visit 函数或者创建一个新的递归函数来处理 children
-                        // 为了简单起见，我们在这里不深度递归构建完整的树，而是依赖顶层的遍历
-                        // 实际的 AST 遍历通常需要携带上下文
-                    });
-
-                    // 重新实现子节点遍历逻辑
+                if (
+                    [
+                        ts.SyntaxKind.ClassDeclaration,
+                        ts.SyntaxKind.ModuleDeclaration,
+                        ts.SyntaxKind.InterfaceDeclaration,
+                        ts.SyntaxKind.EnumDeclaration,
+                    ].includes(node.kind)
+                ) {
                     element.children = this.getChildren(node, sourceFile, filePath);
                 }
 
                 elements.push(element);
             } else {
-                // 继续遍历子节点
                 ts.forEachChild(node, visit);
             }
         };
 
         ts.forEachChild(sourceFile, visit);
 
+        if (preparedFile.framework !== 'standard' && !elements.some((item) => item.kind === CodeElementKind.Component)) {
+            elements.unshift(this.createSyntheticVueComponent(filePath, preparedFile, sourceFile));
+        }
+
         return elements;
     }
 
-    private getObjectLiteralProperties(node: ts.ObjectLiteralExpression, sourceFile: ts.SourceFile, filePath: string): CodeElement[] {
-        const properties: CodeElement[] = [];
+    private createVueComponentElement(
+        exportNode: ts.ExportAssignment,
+        filePath: string,
+        preparedFile: PreparedScriptFile,
+        sourceFile: ts.SourceFile
+    ): CodeElement | null {
+        if (preparedFile.framework === 'standard') {
+            return null;
+        }
 
-        for (const prop of node.properties) {
-            if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
-                const element = this.createCodeElement(
-                    prop.name.text,
+        const optionsNode = this.getVueComponentOptions(exportNode.expression);
+        const componentName = optionsNode
+            ? this.getVueComponentName(optionsNode) || preparedFile.componentName || path.basename(filePath)
+            : preparedFile.componentName || path.basename(filePath);
+
+        const element = this.createCodeElement(
+            componentName,
+            CodeElementKind.Component,
+            exportNode,
+            sourceFile,
+            filePath,
+            true
+        );
+
+        if (optionsNode) {
+            element.children = this.getVueOptionChildren(optionsNode, sourceFile, filePath);
+        }
+
+        const componentFactory = this.getVueComponentFactoryElement(
+            exportNode.expression,
+            sourceFile,
+            filePath
+        );
+        if (componentFactory) {
+            element.children = [componentFactory, ...(element.children ?? [])];
+        }
+
+        return element;
+    }
+
+    private createSyntheticVueComponent(
+        filePath: string,
+        preparedFile: PreparedScriptFile,
+        sourceFile: ts.SourceFile
+    ): CodeElement {
+        const endPosition = sourceFile.getLineAndCharacterOfPosition(sourceFile.getEnd());
+
+        return {
+            id: this.generateId(
+                filePath,
+                preparedFile.componentName || path.basename(filePath, path.extname(filePath)),
+                CodeElementKind.Component
+            ),
+            name: preparedFile.componentName || path.basename(filePath, path.extname(filePath)),
+            kind: CodeElementKind.Component,
+            range: new vscode.Range(
+                new vscode.Position(0, 0),
+                new vscode.Position(endPosition.line, endPosition.character)
+            ),
+            filePath,
+            isExported: true,
+            children: [],
+        };
+    }
+
+    private getVueComponentOptions(expression: ts.Expression): ts.ObjectLiteralExpression | null {
+        if (ts.isObjectLiteralExpression(expression)) {
+            return expression;
+        }
+
+        if (ts.isCallExpression(expression) && expression.arguments.length > 0) {
+            const firstArg = expression.arguments[0];
+            if (ts.isObjectLiteralExpression(firstArg)) {
+                return firstArg;
+            }
+        }
+
+        return null;
+    }
+
+    private getVueComponentFactoryElement(
+        expression: ts.Expression,
+        sourceFile: ts.SourceFile,
+        filePath: string
+    ): CodeElement | null {
+        if (!ts.isCallExpression(expression)) {
+            return null;
+        }
+
+        const factoryName = this.getExpressionText(expression.expression);
+        if (!factoryName) {
+            return null;
+        }
+
+        return this.createCodeElement(
+            factoryName,
+            CodeElementKind.Function,
+            expression.expression,
+            sourceFile,
+            filePath,
+            false
+        );
+    }
+
+    private getVueComponentName(optionsNode: ts.ObjectLiteralExpression): string | undefined {
+        for (const property of optionsNode.properties) {
+            if (!ts.isPropertyAssignment(property)) {
+                continue;
+            }
+
+            if (this.getPropertyNameText(property.name) !== 'name') {
+                continue;
+            }
+
+            if (ts.isStringLiteralLike(property.initializer)) {
+                return property.initializer.text;
+            }
+        }
+
+        return undefined;
+    }
+
+    private getVueOptionChildren(
+        optionsNode: ts.ObjectLiteralExpression,
+        sourceFile: ts.SourceFile,
+        filePath: string
+    ): CodeElement[] {
+        const children: CodeElement[] = [];
+
+        for (const property of optionsNode.properties) {
+            if (ts.isMethodDeclaration(property)) {
+                const methodName = this.getPropertyNameText(property.name);
+                if (methodName) {
+                    children.push(
+                        this.createCodeElement(
+                            methodName,
+                            CodeElementKind.Method,
+                            property,
+                            sourceFile,
+                            filePath,
+                            false
+                        )
+                    );
+                }
+                continue;
+            }
+
+            if (!ts.isPropertyAssignment(property)) {
+                continue;
+            }
+
+            const optionName = this.getPropertyNameText(property.name);
+            if (!optionName) {
+                continue;
+            }
+
+            if (ts.isObjectLiteralExpression(property.initializer)) {
+                if (['methods', 'computed', 'props', 'emits', 'components'].includes(optionName)) {
+                    children.push(
+                        ...this.getNestedVueOptionMembers(
+                            property.initializer,
+                            sourceFile,
+                            filePath,
+                            optionName
+                        )
+                    );
+                    continue;
+                }
+
+                const optionElement = this.createCodeElement(
+                    optionName,
                     CodeElementKind.Property,
-                    prop,
+                    property,
                     sourceFile,
                     filePath,
                     false
                 );
-                properties.push(element);
+                optionElement.children = this.getObjectLiteralProperties(
+                    property.initializer,
+                    sourceFile,
+                    filePath
+                );
+                children.push(optionElement);
+                continue;
             }
+
+            const kind = this.isFunctionLikeExpression(property.initializer)
+                ? CodeElementKind.Method
+                : CodeElementKind.Property;
+            children.push(
+                this.createCodeElement(
+                    optionName,
+                    kind,
+                    property,
+                    sourceFile,
+                    filePath,
+                    false
+                )
+            );
+        }
+
+        return children;
+    }
+
+    private getNestedVueOptionMembers(
+        node: ts.ObjectLiteralExpression,
+        sourceFile: ts.SourceFile,
+        filePath: string,
+        optionName: string
+    ): CodeElement[] {
+        const children: CodeElement[] = [];
+
+        for (const property of node.properties) {
+            if (ts.isSpreadAssignment(property)) {
+                continue;
+            }
+
+            if (ts.isMethodDeclaration(property)) {
+                const memberName = this.getPropertyNameText(property.name);
+                if (memberName) {
+                    children.push(
+                        this.createCodeElement(
+                            memberName,
+                            CodeElementKind.Method,
+                            property,
+                            sourceFile,
+                            filePath,
+                            false
+                        )
+                    );
+                }
+                continue;
+            }
+
+            if (ts.isShorthandPropertyAssignment(property)) {
+                const kind = this.getVueOptionMemberKind(optionName);
+                children.push(
+                    this.createCodeElement(
+                        property.name.text,
+                        kind,
+                        property,
+                        sourceFile,
+                        filePath,
+                        false
+                    )
+                );
+                continue;
+            }
+
+            if (!ts.isPropertyAssignment(property)) {
+                continue;
+            }
+
+            const memberName = this.getPropertyNameText(property.name);
+            if (!memberName) {
+                continue;
+            }
+
+            const kind = this.getVueOptionMemberKind(optionName);
+            const child = this.createCodeElement(
+                memberName,
+                kind,
+                property,
+                sourceFile,
+                filePath,
+                false
+            );
+
+            if (ts.isObjectLiteralExpression(property.initializer)) {
+                child.children = this.getObjectLiteralProperties(
+                    property.initializer,
+                    sourceFile,
+                    filePath
+                );
+            }
+
+            children.push(child);
+        }
+
+        return children;
+    }
+
+    private getVueOptionMemberKind(optionName: string): CodeElementKind {
+        if (optionName === 'methods' || optionName === 'computed') {
+            return CodeElementKind.Method;
+        }
+
+        if (optionName === 'components') {
+            return CodeElementKind.Module;
+        }
+
+        return CodeElementKind.Property;
+    }
+
+    private isFunctionLikeExpression(node: ts.Expression): boolean {
+        return ts.isArrowFunction(node) || ts.isFunctionExpression(node);
+    }
+
+    private getObjectLiteralProperties(
+        node: ts.ObjectLiteralExpression,
+        sourceFile: ts.SourceFile,
+        filePath: string
+    ): CodeElement[] {
+        const properties: CodeElement[] = [];
+
+        for (const prop of node.properties) {
+            if (ts.isSpreadAssignment(prop)) {
+                continue;
+            }
+
+            if (ts.isMethodDeclaration(prop)) {
+                const methodName = this.getPropertyNameText(prop.name);
+                if (methodName) {
+                    properties.push(
+                        this.createCodeElement(
+                            methodName,
+                            CodeElementKind.Method,
+                            prop,
+                            sourceFile,
+                            filePath,
+                            false
+                        )
+                    );
+                }
+                continue;
+            }
+
+            if (ts.isShorthandPropertyAssignment(prop)) {
+                properties.push(
+                    this.createCodeElement(
+                        prop.name.text,
+                        CodeElementKind.Property,
+                        prop,
+                        sourceFile,
+                        filePath,
+                        false
+                    )
+                );
+                continue;
+            }
+
+            if (!ts.isPropertyAssignment(prop)) {
+                continue;
+            }
+
+            const propName = this.getPropertyNameText(prop.name);
+            if (!propName) {
+                continue;
+            }
+
+            const element = this.createCodeElement(
+                propName,
+                this.isFunctionLikeExpression(prop.initializer)
+                    ? CodeElementKind.Method
+                    : CodeElementKind.Property,
+                prop,
+                sourceFile,
+                filePath,
+                false
+            );
+
+            if (ts.isObjectLiteralExpression(prop.initializer)) {
+                element.children = this.getObjectLiteralProperties(
+                    prop.initializer,
+                    sourceFile,
+                    filePath
+                );
+            }
+
+            properties.push(element);
         }
 
         return properties;
@@ -434,29 +804,33 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
     private getChildren(node: ts.Node, sourceFile: ts.SourceFile, filePath: string): CodeElement[] {
         const children: CodeElement[] = [];
 
-        node.forEachChild(child => {
+        node.forEachChild((child) => {
             let element: CodeElement | null = null;
-            let isExported = false; // 类成员的导出通常由 public/private 控制，或者是隐含的
 
-            // 简单处理方法和属性
-            if (ts.isMethodDeclaration(child) && ts.isIdentifier(child.name)) {
-                element = this.createCodeElement(
-                    child.name.text,
-                    CodeElementKind.Method,
-                    child,
-                    sourceFile,
-                    filePath,
-                    false
-                );
-            } else if (ts.isPropertyDeclaration(child) && ts.isIdentifier(child.name)) {
-                element = this.createCodeElement(
-                    child.name.text,
-                    CodeElementKind.Property,
-                    child,
-                    sourceFile,
-                    filePath,
-                    false
-                );
+            if (ts.isMethodDeclaration(child)) {
+                const methodName = this.getPropertyNameText(child.name);
+                if (methodName) {
+                    element = this.createCodeElement(
+                        methodName,
+                        CodeElementKind.Method,
+                        child,
+                        sourceFile,
+                        filePath,
+                        false
+                    );
+                }
+            } else if (ts.isPropertyDeclaration(child)) {
+                const propertyName = this.getPropertyNameText(child.name);
+                if (propertyName) {
+                    element = this.createCodeElement(
+                        propertyName,
+                        CodeElementKind.Property,
+                        child,
+                        sourceFile,
+                        filePath,
+                        false
+                    );
+                }
             }
 
             if (element) {
@@ -465,6 +839,34 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
         });
 
         return children;
+    }
+
+    private getPropertyNameText(name: ts.PropertyName | ts.MemberName | undefined): string | undefined {
+        if (!name) {
+            return undefined;
+        }
+
+        if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
+            return name.text;
+        }
+
+        if (ts.isComputedPropertyName(name) && ts.isIdentifier(name.expression)) {
+            return name.expression.text;
+        }
+
+        return undefined;
+    }
+
+    private getExpressionText(expression: ts.Expression): string | undefined {
+        if (ts.isIdentifier(expression) || ts.isPrivateIdentifier(expression)) {
+            return expression.text;
+        }
+
+        if (ts.isPropertyAccessExpression(expression)) {
+            return expression.getText();
+        }
+
+        return undefined;
     }
 
     private createCodeElement(
@@ -488,7 +890,7 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
             ),
             filePath,
             isExported,
-            children: []
+            children: [],
         };
     }
 }

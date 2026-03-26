@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
  */
 export enum CodeElementKind {
     File = 'file',
+    Component = 'component',
     Class = 'class',
     Interface = 'interface',
     Function = 'function',

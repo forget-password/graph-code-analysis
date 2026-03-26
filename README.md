@@ -5,7 +5,7 @@ A powerful VSCode extension that visualizes code dependencies and relationships 
 ## 🌟 Features
 
 - 📁 **Folder Analysis**: Analyze entire project folders to extract code structure
-- 🔍 **Language Support**: Built-in support for TypeScript, JavaScript, and more
+- 🔍 **Language Support**: Built-in support for TypeScript, JavaScript, Vue 2, Vue 3, and more
 - 🎨 **Interactive Graph**: Visualize code dependencies with draggable nodes and connections
 - 🔗 **Smart Navigation**: Click on nodes to jump directly to code definitions
 - 🔌 **Plugin Architecture**: Extensible design for adding new language support
@@ -80,7 +80,7 @@ Configure the extension in your VSCode settings:
 - [ ] Performance optimization
 
 ### Phase 4: Language Extensions
-- [ ] Vue analyzer
+- [x] Vue 2 / Vue 3 file interpretation
 - [ ] React analyzer
 - [ ] Flutter/Dart support
 - [ ] Golang support

@@ -4,6 +4,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import { PluginManager } from '../PluginManager';
 import {
+    CodeElement,
     FileAnalysisResult,
     GraphData,
     GraphNode,
@@ -234,7 +235,7 @@ export class CodeAnalyzer {
                 id: result.filePath,
                 label: path.basename(result.filePath),
                 position: { x: 0, y: 0 }, // 将由布局算法计算
-                elements: result.elements,
+                elements: this.flattenElements(result.elements),
                 collapsed: false,
                 filePath: result.filePath,
             });
@@ -270,6 +271,18 @@ export class CodeAnalyzer {
                 direction: 'TB',
             },
         };
+    }
+
+    private flattenElements(elements: CodeElement[]): CodeElement[] {
+        const flattened: CodeElement[] = [];
+
+        const visit = (element: CodeElement) => {
+            flattened.push(element);
+            (element.children ?? []).forEach(visit);
+        };
+
+        elements.forEach(visit);
+        return flattened;
     }
 
     /**
