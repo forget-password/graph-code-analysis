@@ -44,6 +44,7 @@ export class GraphViewPanel {
         // 如果已存在面板，则显示它
         if (GraphViewPanel.currentPanel) {
             GraphViewPanel.currentPanel.panel.reveal(column);
+            GraphViewPanel.currentPanel.refreshWebview();
             if (graphData) {
                 GraphViewPanel.currentPanel.updateGraphData(graphData);
             }
@@ -190,6 +191,16 @@ export class GraphViewPanel {
         this.panel.webview.html = this.getHtmlContent();
     }
 
+    private refreshWebview(): void {
+        this.update();
+        if (this.graphData) {
+            this.panel.webview.postMessage({
+                type: 'updateGraph',
+                data: this.graphData,
+            });
+        }
+    }
+
     /**
    * 获取 HTML 内容
    */
@@ -197,12 +208,13 @@ export class GraphViewPanel {
         const webview = this.panel.webview;
 
         // 获取资源 URI
+        const cacheBuster = `v=${Date.now()}`;
         const stylesUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'media', 'graph-app.css')
-        );
+        ).with({ query: cacheBuster });
         const graphAppUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'media', 'graph-app.js')
-        );
+        ).with({ query: cacheBuster });
 
         // 生成 nonce 用于 CSP
         const nonce = this.getNonce();

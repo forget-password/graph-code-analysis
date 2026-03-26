@@ -3,14 +3,12 @@ import { createRoot } from 'react-dom/client';
 import {
   Background,
   Handle,
-  MarkerType,
   MiniMap,
   Position,
   ReactFlow,
   ReactFlowProvider,
   getNodesBounds,
   getViewportForBounds,
-  useEdgesState,
   useNodeId,
   useNodesState,
   useReactFlow,
@@ -23,6 +21,7 @@ import '@xyflow/react/dist/style.css';
 import './graph-app.css';
 
 const elk = new ELK();
+
 const DEFAULT_DIRECTION = 'TB';
 const PREVIEW_LIMIT = 5;
 const COMPACT_PREVIEW_LIMIT = 4;
@@ -44,6 +43,10 @@ const EDGE_COLORS = {
 const vscode = typeof acquireVsCodeApi === 'function'
   ? acquireVsCodeApi()
   : { postMessage() {} };
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
 function normalizeAlgorithm(algorithm) {
   return algorithm === 'dagre' ? 'dagre' : 'elk';
@@ -164,7 +167,7 @@ function buildFlowNodes(graphData, direction) {
   });
 }
 
-function buildFlowEdges(graphData) {
+function buildEdgeMetadata(graphData) {
   return graphData.edges.map((edge) => {
     const color = EDGE_COLORS[edge.type] ?? '#8a8f98';
 
@@ -172,62 +175,12 @@ function buildFlowEdges(graphData) {
       id: edge.id,
       source: edge.source.nodeId,
       target: edge.target.nodeId,
-      type: 'smoothstep',
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color,
-      },
-      style: {
-        stroke: color,
-        strokeWidth: 1.7,
-        opacity: 0.78,
-      },
-      data: {
-        baseOpacity: 0.78,
-      },
+      type: edge.type,
+      color,
+      baseOpacity: 0.78,
+      strokeWidth: 1.7,
     };
   });
-}
-
-function decorateGraph(nodes, edges, matchedIds, expandedNodeIds, onToggleExpand, lowDetailMode) {
-  const hasSearch = matchedIds !== null;
-
-  return {
-    nodes: nodes.map((node) => {
-      const isMatched = !hasSearch || matchedIds.has(node.id);
-      const expanded = expandedNodeIds.has(node.id);
-
-      return {
-        ...node,
-        style: {
-          ...node.style,
-          height: lowDetailMode
-            ? node.data.minimalHeight
-            : (expanded ? node.data.expandedHeight : node.data.collapsedHeight),
-          opacity: isMatched ? 1 : 0.3,
-        },
-        data: {
-          ...node.data,
-          expanded,
-          isDimmed: !isMatched,
-          lowDetailMode,
-          viewportMoving: node.data.viewportMoving ?? false,
-          onToggleExpand,
-        },
-      };
-    }),
-    edges: edges.map((edge) => {
-      const isMatched = !hasSearch || (matchedIds.has(edge.source) && matchedIds.has(edge.target));
-
-      return {
-        ...edge,
-        style: {
-          ...edge.style,
-          opacity: isMatched ? edge.data.baseOpacity : 0.1,
-        },
-      };
-    }),
-  };
 }
 
 function getMatchedNodeIds(graphData, searchTerm) {
@@ -250,6 +203,34 @@ function getMatchedNodeIds(graphData, searchTerm) {
       })
       .map((node) => node.id)
   );
+}
+
+function decorateNodes(nodes, matchedIds, expandedNodeIds, onToggleExpand, lowDetailMode, viewportMoving) {
+  const hasSearch = matchedIds !== null;
+
+  return nodes.map((node) => {
+    const isMatched = !hasSearch || matchedIds.has(node.id);
+    const expanded = expandedNodeIds.has(node.id);
+
+    return {
+      ...node,
+      style: {
+        ...node.style,
+        height: lowDetailMode
+          ? node.data.minimalHeight
+          : (expanded ? node.data.expandedHeight : node.data.collapsedHeight),
+        opacity: isMatched ? 1 : 0.3,
+      },
+      data: {
+        ...node.data,
+        expanded,
+        isDimmed: !isMatched,
+        lowDetailMode,
+        viewportMoving,
+        onToggleExpand,
+      },
+    };
+  });
 }
 
 function applyDagreLayout(nodes, edges, direction) {
@@ -338,13 +319,660 @@ async function applyElkLayout(nodes, edges, direction) {
 async function layoutGraph(graphData, algorithm) {
   const direction = normalizeDirection(graphData.layout?.direction);
   const nodes = buildFlowNodes(graphData, direction);
-  const edges = buildFlowEdges(graphData);
+  const edges = buildEdgeMetadata(graphData);
 
   if (algorithm === 'dagre') {
     return applyDagreLayout(nodes, edges, direction);
   }
 
   return applyElkLayout(nodes, edges, direction);
+}
+
+function hexToRgba(hex, alpha = 1) {
+  const normalized = hex.replace('#', '');
+  const value = normalized.length === 3
+    ? normalized.split('').map((part) => part + part).join('')
+    : normalized;
+  const parsed = Number.parseInt(value, 16);
+
+  return [
+    ((parsed >> 16) & 255) / 255,
+    ((parsed >> 8) & 255) / 255,
+    (parsed & 255) / 255,
+    alpha,
+  ];
+}
+
+function rgbaToCss(color) {
+  const r = Math.round((color[0] ?? 0) * 255);
+  const g = Math.round((color[1] ?? 0) * 255);
+  const b = Math.round((color[2] ?? 0) * 255);
+  const a = color[3] ?? 1;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+function alignTo(value, alignment) {
+  return Math.ceil(value / alignment) * alignment;
+}
+
+function toWorldNode(node) {
+  return {
+    id: node.id,
+    x: node.position.x,
+    y: node.position.y,
+    width: Number(node.style?.width ?? 0),
+    height: Number(node.style?.height ?? 0),
+    sourcePosition: node.sourcePosition,
+    targetPosition: node.targetPosition,
+  };
+}
+
+function getAnchorPoint(node, position) {
+  const centerX = node.x + (node.width / 2);
+  const centerY = node.y + (node.height / 2);
+
+  switch (position) {
+    case Position.Top:
+      return { x: centerX, y: node.y };
+    case Position.Right:
+      return { x: node.x + node.width, y: centerY };
+    case Position.Left:
+      return { x: node.x, y: centerY };
+    default:
+      return { x: centerX, y: node.y + node.height };
+  }
+}
+
+function dedupePolyline(points) {
+  return points.filter((point, index) => {
+    if (index === 0) {
+      return true;
+    }
+
+    const previous = points[index - 1];
+    return Math.abs(previous.x - point.x) > 0.1 || Math.abs(previous.y - point.y) > 0.1;
+  });
+}
+
+function computeWorldBounds(nodes) {
+  if (!nodes.length) {
+    return { x: 0, y: 0, width: 1, height: 1 };
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  nodes.forEach((node) => {
+    const width = Number(node.style?.width ?? 0);
+    const height = Number(node.style?.height ?? 0);
+    minX = Math.min(minX, node.position.x);
+    minY = Math.min(minY, node.position.y);
+    maxX = Math.max(maxX, node.position.x + width);
+    maxY = Math.max(maxY, node.position.y + height);
+  });
+
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
+function buildOrthogonalRoute(sourceNode, targetNode) {
+  const source = getAnchorPoint(sourceNode, sourceNode.sourcePosition);
+  const target = getAnchorPoint(targetNode, targetNode.targetPosition);
+  const sourceHorizontal = sourceNode.sourcePosition === Position.Left || sourceNode.sourcePosition === Position.Right;
+
+  if (sourceHorizontal) {
+    const midX = (source.x + target.x) / 2;
+    return dedupePolyline([
+      source,
+      { x: midX, y: source.y },
+      { x: midX, y: target.y },
+      target,
+    ]);
+  }
+
+  const midY = (source.y + target.y) / 2;
+  return dedupePolyline([
+    source,
+    { x: source.x, y: midY },
+    { x: target.x, y: midY },
+    target,
+  ]);
+}
+
+function mergeIntervals(intervals) {
+  if (intervals.length === 0) {
+    return [];
+  }
+
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0]);
+  const merged = [[sorted[0][0], sorted[0][1]]];
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index];
+    const last = merged[merged.length - 1];
+
+    if (current[0] <= last[1]) {
+      last[1] = Math.max(last[1], current[1]);
+    } else {
+      merged.push([current[0], current[1]]);
+    }
+  }
+
+  return merged;
+}
+
+function splitAxisAlignedSegmentForNodes(segment, nodes, ignoredNodeIds) {
+  const horizontal = Math.abs(segment.y1 - segment.y2) < 0.1;
+  const intervals = [];
+
+  nodes.forEach((node) => {
+    if (ignoredNodeIds.has(node.id)) {
+      return;
+    }
+
+    const left = node.x;
+    const right = node.x + node.width;
+    const top = node.y;
+    const bottom = node.y + node.height;
+
+    if (horizontal) {
+      if (segment.y1 <= top || segment.y1 >= bottom) {
+        return;
+      }
+
+      const from = Math.max(Math.min(segment.x1, segment.x2), left);
+      const to = Math.min(Math.max(segment.x1, segment.x2), right);
+      if (to > from) {
+        intervals.push([from, to]);
+      }
+      return;
+    }
+
+    if (segment.x1 <= left || segment.x1 >= right) {
+      return;
+    }
+
+    const from = Math.max(Math.min(segment.y1, segment.y2), top);
+    const to = Math.min(Math.max(segment.y1, segment.y2), bottom);
+    if (to > from) {
+      intervals.push([from, to]);
+    }
+  });
+
+  const merged = mergeIntervals(intervals);
+  if (merged.length === 0) {
+    return { solid: [segment], dashed: [] };
+  }
+
+  const ascendingStart = horizontal ? Math.min(segment.x1, segment.x2) : Math.min(segment.y1, segment.y2);
+  const ascendingEnd = horizontal ? Math.max(segment.x1, segment.x2) : Math.max(segment.y1, segment.y2);
+  let cursor = ascendingStart;
+  const solid = [];
+  const dashed = [];
+
+  merged.forEach(([from, to]) => {
+    if (from > cursor) {
+      solid.push(horizontal
+        ? { ...segment, x1: cursor, x2: from }
+        : { ...segment, y1: cursor, y2: from });
+    }
+
+    dashed.push(horizontal
+      ? { ...segment, x1: from, x2: to }
+      : { ...segment, y1: from, y2: to });
+    cursor = to;
+  });
+
+  if (cursor < ascendingEnd) {
+    solid.push(horizontal
+      ? { ...segment, x1: cursor, x2: ascendingEnd }
+      : { ...segment, y1: cursor, y2: ascendingEnd });
+  }
+
+  const reverseIfNeeded = (part) => {
+    if (horizontal && segment.x1 > segment.x2) {
+      return { ...part, x1: part.x2, x2: part.x1 };
+    }
+
+    if (!horizontal && segment.y1 > segment.y2) {
+      return { ...part, y1: part.y2, y2: part.y1 };
+    }
+
+    return part;
+  };
+
+  return {
+    solid: solid.map(reverseIfNeeded),
+    dashed: dashed.map(reverseIfNeeded),
+  };
+}
+
+function buildEdgeScene(nodes, edges, matchedNodeIds) {
+  const nodeMap = new Map(nodes.map((node) => [node.id, toWorldNode(node)]));
+  const hasSearch = matchedNodeIds !== null;
+  const segments = [];
+  const dashedSegments = [];
+  const arrows = [];
+  const worldNodes = nodes.map(toWorldNode);
+
+  edges.forEach((edge) => {
+    const sourceNode = nodeMap.get(edge.source);
+    const targetNode = nodeMap.get(edge.target);
+
+    if (!sourceNode || !targetNode) {
+      return;
+    }
+
+    const dimmed = hasSearch && !(matchedNodeIds.has(edge.source) && matchedNodeIds.has(edge.target));
+    const opacity = dimmed ? 0.1 : edge.baseOpacity;
+    const color = hexToRgba(edge.color, opacity);
+    const route = buildOrthogonalRoute(sourceNode, targetNode);
+
+    for (let index = 1; index < route.length; index += 1) {
+      const previous = route[index - 1];
+      const current = route[index];
+      const split = splitAxisAlignedSegmentForNodes({
+        x1: previous.x,
+        y1: previous.y,
+        x2: current.x,
+        y2: current.y,
+        color,
+        thickness: dimmed ? 1.1 : edge.strokeWidth,
+      }, worldNodes, new Set([edge.source, edge.target]));
+
+      segments.push(...split.solid);
+      dashedSegments.push(...split.dashed);
+    }
+
+    if (route.length >= 2) {
+      arrows.push({
+        start: route[route.length - 2],
+        end: route[route.length - 1],
+        color,
+      });
+    }
+  });
+
+  return { segments, dashedSegments, arrows };
+}
+
+function buildEdgeInstanceData(segments) {
+  const data = new Float32Array(segments.length * 12);
+
+  segments.forEach((segment, index) => {
+    const offset = index * 12;
+    data[offset + 0] = segment.x1;
+    data[offset + 1] = segment.y1;
+    data[offset + 2] = segment.x2;
+    data[offset + 3] = segment.y2;
+    data[offset + 4] = segment.color[0];
+    data[offset + 5] = segment.color[1];
+    data[offset + 6] = segment.color[2];
+    data[offset + 7] = segment.color[3];
+    data[offset + 8] = segment.thickness;
+    data[offset + 9] = 0;
+    data[offset + 10] = 0;
+    data[offset + 11] = 0;
+  });
+
+  return data;
+}
+
+function screenToWorld(point, viewport) {
+  return {
+    x: (point.x - viewport.x) / viewport.zoom,
+    y: (point.y - viewport.y) / viewport.zoom,
+  };
+}
+
+function worldToScreen(point, viewport) {
+  return {
+    x: (point.x * viewport.zoom) + viewport.x,
+    y: (point.y * viewport.zoom) + viewport.y,
+  };
+}
+
+function drawArrowOverlay(context, overlayScene, viewport, size, dpr) {
+  context.save();
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, size.width, size.height);
+
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.setLineDash([8, 6]);
+  overlayScene.dashedSegments.forEach((segment) => {
+    const start = worldToScreen({ x: segment.x1, y: segment.y1 }, viewport);
+    const end = worldToScreen({ x: segment.x2, y: segment.y2 }, viewport);
+    context.beginPath();
+    context.strokeStyle = rgbaToCss(segment.color);
+    context.lineWidth = Math.max(1, segment.thickness * viewport.zoom);
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.stroke();
+  });
+  context.setLineDash([]);
+
+  overlayScene.arrows.forEach((arrow) => {
+    const start = worldToScreen(arrow.start, viewport);
+    const end = worldToScreen(arrow.end, viewport);
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const length = Math.hypot(dx, dy);
+
+    if (length < 1) {
+      return;
+    }
+
+    const ux = dx / length;
+    const uy = dy / length;
+    const sizePx = clamp(7 + (viewport.zoom * 1.6), 7, 12);
+    const backX = end.x - (ux * sizePx);
+    const backY = end.y - (uy * sizePx);
+    const nx = -uy;
+    const ny = ux;
+
+    context.beginPath();
+    context.moveTo(end.x, end.y);
+    context.lineTo(backX + (nx * sizePx * 0.55), backY + (ny * sizePx * 0.55));
+    context.lineTo(backX - (nx * sizePx * 0.55), backY - (ny * sizePx * 0.55));
+    context.closePath();
+    context.fillStyle = rgbaToCss(arrow.color);
+    context.fill();
+  });
+
+  context.restore();
+}
+
+function createCanvas2dEdgeRenderer(canvas) {
+  const context = canvas.getContext('2d');
+  let segments = [];
+
+  return {
+    mode: 'canvas2d',
+    resize() {},
+    updateScene(scene) {
+      segments = scene.segments;
+    },
+    render({ viewport, size, dpr }) {
+      if (!context) {
+        return;
+      }
+
+      context.save();
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      context.clearRect(0, 0, size.width, size.height);
+      context.lineCap = 'round';
+
+      segments.forEach((segment) => {
+        const start = worldToScreen({ x: segment.x1, y: segment.y1 }, viewport);
+        const end = worldToScreen({ x: segment.x2, y: segment.y2 }, viewport);
+        context.beginPath();
+        context.strokeStyle = rgbaToCss(segment.color);
+        context.lineWidth = Math.max(1, segment.thickness * viewport.zoom);
+        context.moveTo(start.x, start.y);
+        context.lineTo(end.x, end.y);
+        context.stroke();
+      });
+
+      context.restore();
+    },
+    destroy() {},
+  };
+}
+
+async function createWebGpuEdgeRenderer(canvas) {
+  if (!navigator.gpu) {
+    return null;
+  }
+
+  const context = canvas.getContext('webgpu');
+  if (!context) {
+    return null;
+  }
+
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    return null;
+  }
+
+  const device = await adapter.requestDevice();
+  const format = navigator.gpu.getPreferredCanvasFormat();
+
+  const uniformBuffer = device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  const bindGroupLayout = device.createBindGroupLayout({
+    entries: [{
+      binding: 0,
+      visibility: GPUShaderStage.VERTEX,
+      buffer: { type: 'uniform' },
+    }],
+  });
+
+  const bindGroup = device.createBindGroup({
+    layout: bindGroupLayout,
+    entries: [{
+      binding: 0,
+      resource: { buffer: uniformBuffer },
+    }],
+  });
+
+  const shader = device.createShaderModule({
+    code: `
+struct ViewUniforms {
+  data0: vec4f,
+  data1: vec4f,
+}
+
+@group(0) @binding(0)
+var<uniform> view: ViewUniforms;
+
+struct VertexInput {
+  @location(0) local: vec2f,
+  @location(1) start: vec2f,
+  @location(2) end: vec2f,
+  @location(3) color: vec4f,
+  @location(4) metrics: vec4f,
+}
+
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) color: vec4f,
+}
+
+fn world_to_clip(world: vec2f) -> vec4f {
+  let screen = (world * view.data1.x) + view.data0.xy;
+  let clip = vec2f(
+    (screen.x / view.data0.z) * 2.0 - 1.0,
+    1.0 - (screen.y / view.data0.w) * 2.0
+  );
+
+  return vec4f(clip, 0.0, 1.0);
+}
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+  var output: VertexOutput;
+  let direction = input.end - input.start;
+  let length_value = max(length(direction), 0.0001);
+  let tangent = direction / length_value;
+  let normal = vec2f(-tangent.y, tangent.x);
+  let half_thickness = max(input.metrics.x * 0.5, 0.75 / max(view.data1.x, 0.0001));
+  let world = input.start + (tangent * (input.local.x * length_value)) + (normal * input.local.y * half_thickness);
+
+  output.position = world_to_clip(world);
+  output.color = input.color;
+  return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+  return input.color;
+}
+`,
+  });
+
+  const pipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({
+      bindGroupLayouts: [bindGroupLayout],
+    }),
+    vertex: {
+      module: shader,
+      entryPoint: 'vs_main',
+      buffers: [
+        {
+          arrayStride: 8,
+          stepMode: 'vertex',
+          attributes: [{
+            shaderLocation: 0,
+            offset: 0,
+            format: 'float32x2',
+          }],
+        },
+        {
+          arrayStride: 48,
+          stepMode: 'instance',
+          attributes: [
+            { shaderLocation: 1, offset: 0, format: 'float32x2' },
+            { shaderLocation: 2, offset: 8, format: 'float32x2' },
+            { shaderLocation: 3, offset: 16, format: 'float32x4' },
+            { shaderLocation: 4, offset: 32, format: 'float32x4' },
+          ],
+        },
+      ],
+    },
+    fragment: {
+      module: shader,
+      entryPoint: 'fs_main',
+      targets: [{
+        format,
+        blend: {
+          color: {
+            srcFactor: 'src-alpha',
+            dstFactor: 'one-minus-src-alpha',
+            operation: 'add',
+          },
+          alpha: {
+            srcFactor: 'one',
+            dstFactor: 'one-minus-src-alpha',
+            operation: 'add',
+          },
+        },
+      }],
+    },
+    primitive: {
+      topology: 'triangle-list',
+    },
+  });
+
+  const quad = new Float32Array([
+    0, -1,
+    1, -1,
+    1, 1,
+    0, -1,
+    1, 1,
+    0, 1,
+  ]);
+
+  const vertexBuffer = device.createBuffer({
+    size: quad.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(vertexBuffer, 0, quad);
+
+  let instanceBuffer = null;
+  let capacity = 0;
+  let count = 0;
+
+  function ensureBuffer(requiredSize) {
+    if (instanceBuffer && capacity >= requiredSize) {
+      return;
+    }
+
+    instanceBuffer?.destroy();
+    capacity = alignTo(Math.max(requiredSize, capacity * 2 || 1024), 4);
+    instanceBuffer = device.createBuffer({
+      size: capacity,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+  }
+
+  context.configure({
+    device,
+    format,
+    alphaMode: 'premultiplied',
+  });
+
+  return {
+    mode: 'webgpu',
+    resize() {
+      context.configure({
+        device,
+        format,
+        alphaMode: 'premultiplied',
+      });
+    },
+    updateScene(scene) {
+      const data = buildEdgeInstanceData(scene.segments);
+      ensureBuffer(data.byteLength || 4);
+      count = scene.segments.length;
+
+      if (data.byteLength > 0) {
+        device.queue.writeBuffer(instanceBuffer, 0, data);
+      }
+    },
+    render({ viewport, size }) {
+      device.queue.writeBuffer(
+        uniformBuffer,
+        0,
+        new Float32Array([
+          viewport.x,
+          viewport.y,
+          size.width,
+          size.height,
+          viewport.zoom,
+          0,
+          0,
+          0,
+        ])
+      );
+
+      const encoder = device.createCommandEncoder();
+      const view = context.getCurrentTexture().createView();
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view,
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        }],
+      });
+
+      if (count > 0 && instanceBuffer) {
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.setVertexBuffer(0, vertexBuffer);
+        pass.setVertexBuffer(1, instanceBuffer);
+        pass.draw(6, count);
+      }
+
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+    },
+    destroy() {
+      vertexBuffer.destroy();
+      uniformBuffer.destroy();
+      instanceBuffer?.destroy();
+    },
+  };
 }
 
 function downloadDataUrl(filename, dataUrl) {
@@ -381,13 +1009,9 @@ const FileNode = memo(function FileNode({ data, selected }) {
         <>
           <button
             type="button"
-            className="file-node__header nodrag nopan"
+            className="file-node__header nopan"
             onClick={(event) => {
               event.stopPropagation();
-              vscode.postMessage({
-                type: 'nodeClicked',
-                data: { nodeId: data.filePath },
-              });
             }}
           >
             <div className="file-node__title">
@@ -397,58 +1021,58 @@ const FileNode = memo(function FileNode({ data, selected }) {
             <div className="file-node__badge">{data.elementCount}</div>
           </button>
           {data.lowDetailMode ? (
-        <div className="file-node__hint">Zoom in to inspect symbols</div>
-      ) : (
-        <>
-          <div className="file-node__path" title={data.filePath}>{data.filePath}</div>
-          <div
-            className="file-node__symbols nowheel nopan"
-            onWheel={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            {data.elements.length > 0 ? data.elements.map((element) => {
-              const start = getRangeStart(element.range);
-              return (
+            <div className="file-node__hint">Zoom in to inspect symbols</div>
+          ) : (
+            <>
+              <div className="file-node__path" title={data.filePath}>{data.filePath}</div>
+              <div
+                className="file-node__symbols nowheel nopan"
+                onWheel={(event) => {
+                  event.stopPropagation();
+                }}
+              >
+                {data.elements.length > 0 ? data.elements.map((element) => {
+                  const start = getRangeStart(element.range);
+                  return (
+                    <button
+                      key={element.id}
+                      type="button"
+                      className="file-node__symbol nodrag nopan"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        vscode.postMessage({
+                          type: 'elementClicked',
+                          data: {
+                            filePath: element.filePath,
+                            line: start.line,
+                            character: start.character,
+                          },
+                        });
+                      }}
+                    >
+                      <span className="file-node__symbol-name" title={element.name}>{element.name}</span>
+                      <span className="file-node__symbol-kind">{element.kind}</span>
+                    </button>
+                  );
+                }) : (
+                  <div className="file-node__empty">No symbols detected</div>
+                )}
+              </div>
+              {data.canExpand ? (
                 <button
-                  key={element.id}
                   type="button"
-                  className="file-node__symbol nodrag nopan"
+                  className="file-node__toggle nodrag nopan"
                   onClick={(event) => {
                     event.stopPropagation();
-                    vscode.postMessage({
-                      type: 'elementClicked',
-                      data: {
-                        filePath: element.filePath,
-                        line: start.line,
-                        character: start.character,
-                      },
-                    });
+                    data.onToggleExpand?.(data.nodeId);
                   }}
                 >
-                  <span className="file-node__symbol-name" title={element.name}>{element.name}</span>
-                  <span className="file-node__symbol-kind">{element.kind}</span>
+                  <span>{data.expanded ? '⌃' : '⌄'}</span>
+                  <span>{data.expanded ? 'Collapse' : 'Show All'}</span>
                 </button>
-              );
-            }) : (
-              <div className="file-node__empty">No symbols detected</div>
-            )}
-          </div>
-          {data.canExpand ? (
-            <button
-              type="button"
-              className="file-node__toggle nodrag nopan"
-              onClick={(event) => {
-                event.stopPropagation();
-                data.onToggleExpand?.(data.nodeId);
-              }}
-            >
-              <span>{data.expanded ? '⌃' : '⌄'}</span>
-              <span>{data.expanded ? 'Collapse' : 'Show All'}</span>
-            </button>
-          ) : null}
-        </>
-      )}
+              ) : null}
+            </>
+          )}
         </>
       )}
       <Handle type="source" position={data.sourcePosition} className="file-node__handle" />
@@ -471,9 +1095,19 @@ function GraphCanvas() {
   const [isViewportMoving, setIsViewportMoving] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [lowDetailMode, setLowDetailMode] = useState(false);
+  const [rendererMode, setRendererMode] = useState('INIT');
+
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const { fitView, setViewport } = useReactFlow();
+  const { fitView, getViewport, setViewport } = useReactFlow();
+
+  const flowShellRef = useRef(null);
+  const edgeCanvasRef = useRef(null);
+  const arrowCanvasRef = useRef(null);
+  const rendererRef = useRef(null);
+  const viewportRef = useRef({ x: 0, y: 0, zoom: 1 });
+  const sceneRef = useRef({ segments: [], dashedSegments: [], arrows: [] });
+  const frameRef = useRef(0);
+  const sizeRef = useRef({ width: 0, height: 0, dpr: 1 });
   const zoomLevelRef = useRef(100);
   const lowDetailModeRef = useRef(false);
   const viewportMovingRef = useRef(false);
@@ -484,37 +1118,35 @@ function GraphCanvas() {
     [graphData, searchTerm]
   );
 
-  useEffect(() => {
-    const handleMessage = (event) => {
-      const message = event.data;
-      if (message?.type !== 'updateGraph') {
+  const scheduleRender = useCallback(() => {
+    if (frameRef.current) {
+      return;
+    }
+
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = 0;
+
+      const renderer = rendererRef.current;
+      const arrowCanvas = arrowCanvasRef.current;
+      const arrowContext = arrowCanvas?.getContext('2d');
+
+      if (!renderer || !arrowContext || sizeRef.current.width === 0 || sizeRef.current.height === 0) {
         return;
       }
 
-      setGraphData(message.data);
-      setExpandedNodeIds(new Set());
-      setLayoutEngine(normalizeAlgorithm(message.data?.layout?.algorithm));
-    };
+      renderer.render({
+        viewport: viewportRef.current,
+        size: sizeRef.current,
+        dpr: sizeRef.current.dpr,
+      });
 
-    window.addEventListener('message', handleMessage);
-    vscode.postMessage({ type: 'ready' });
-
-    return () => {
-      window.removeEventListener('message', handleMessage);
-    };
-  }, []);
-
-  const handleToggleExpand = useCallback((nodeId) => {
-    setExpandedNodeIds((currentIds) => {
-      const nextIds = new Set(currentIds);
-
-      if (nextIds.has(nodeId)) {
-        nextIds.delete(nodeId);
-      } else {
-        nextIds.add(nodeId);
-      }
-
-      return nextIds;
+      drawArrowOverlay(
+        arrowContext,
+        sceneRef.current,
+        viewportRef.current,
+        sizeRef.current,
+        sizeRef.current.dpr
+      );
     });
   }, []);
 
@@ -547,37 +1179,153 @@ function GraphCanvas() {
     });
   }, []);
 
+  const updateEdgeScene = useCallback((nextNodes, nextEdges, nextMatchedIds) => {
+    const scene = buildEdgeScene(nextNodes, nextEdges, nextMatchedIds);
+    sceneRef.current = scene;
+    rendererRef.current?.updateScene(scene);
+    scheduleRender();
+  }, [scheduleRender]);
+
+  useEffect(() => {
+    const handleMessage = (event) => {
+      const message = event.data;
+      if (message?.type !== 'updateGraph') {
+        return;
+      }
+
+      setGraphData(message.data);
+      setExpandedNodeIds(new Set());
+      setLayoutEngine(normalizeAlgorithm(message.data?.layout?.algorithm));
+    };
+
+    window.addEventListener('message', handleMessage);
+    vscode.postMessage({ type: 'ready' });
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const initializeRenderer = async () => {
+      if (!edgeCanvasRef.current) {
+        return;
+      }
+
+      try {
+        const renderer = await createWebGpuEdgeRenderer(edgeCanvasRef.current);
+        if (cancelled) {
+          renderer?.destroy();
+          return;
+        }
+
+        rendererRef.current = renderer ?? createCanvas2dEdgeRenderer(edgeCanvasRef.current);
+        setRendererMode(renderer ? 'WEBGPU' : 'CANVAS');
+        rendererRef.current.updateScene(sceneRef.current);
+        scheduleRender();
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        rendererRef.current = createCanvas2dEdgeRenderer(edgeCanvasRef.current);
+        setRendererMode('CANVAS');
+        rendererRef.current.updateScene(sceneRef.current);
+        scheduleRender();
+      }
+    };
+
+    initializeRenderer();
+
+    return () => {
+      cancelled = true;
+      if (frameRef.current) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = 0;
+      }
+      rendererRef.current?.destroy();
+      rendererRef.current = null;
+    };
+  }, [scheduleRender]);
+
+  useEffect(() => {
+    if (!flowShellRef.current || !edgeCanvasRef.current || !arrowCanvasRef.current) {
+      return undefined;
+    }
+
+    const updateSize = () => {
+      if (!flowShellRef.current || !edgeCanvasRef.current || !arrowCanvasRef.current) {
+        return;
+      }
+
+      const rect = flowShellRef.current.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const nextSize = {
+        width: Math.max(1, Math.round(rect.width)),
+        height: Math.max(1, Math.round(rect.height)),
+        dpr,
+      };
+
+      sizeRef.current = nextSize;
+
+      [edgeCanvasRef.current, arrowCanvasRef.current].forEach((canvas) => {
+        canvas.width = Math.max(1, Math.round(nextSize.width * dpr));
+        canvas.height = Math.max(1, Math.round(nextSize.height * dpr));
+        canvas.style.width = `${nextSize.width}px`;
+        canvas.style.height = `${nextSize.height}px`;
+      });
+
+      rendererRef.current?.resize(nextSize);
+      scheduleRender();
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(flowShellRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [scheduleRender]);
+
   useEffect(() => {
     if (!graphData?.nodes?.length) {
       setBaseGraph({ nodes: [], edges: [] });
       setNodes([]);
-      setEdges([]);
+      updateEdgeScene([], [], matchedNodeIds);
       setIsLayouting(false);
       return;
     }
 
-    let isCancelled = false;
+    let cancelled = false;
 
     const runLayout = async () => {
       setIsLayouting(true);
 
       try {
         const result = await layoutGraph(graphData, layoutEngine);
-        if (isCancelled) {
+        if (cancelled) {
           return;
         }
 
         setBaseGraph(result);
         setNodes(result.nodes);
-        setEdges(result.edges);
+        updateEdgeScene(result.nodes, result.edges, matchedNodeIds);
 
-        window.requestAnimationFrame(() => {
-          fitView({ padding: 0.18, duration: 320 });
+        window.requestAnimationFrame(async () => {
+          await fitView({ padding: 0.18, duration: 320 });
+          const viewport = getViewport();
+          viewportRef.current = viewport;
+          syncViewportMode(viewport);
+          syncZoomLevel(viewport);
+          scheduleRender();
         });
       } catch (error) {
         console.error('[GraphCanvas] Failed to layout graph', error);
       } finally {
-        if (!isCancelled) {
+        if (!cancelled) {
           setIsLayouting(false);
         }
       }
@@ -586,37 +1334,65 @@ function GraphCanvas() {
     runLayout();
 
     return () => {
-      isCancelled = true;
+      cancelled = true;
     };
-  }, [fitView, graphData, layoutEngine, layoutNonce, setEdges, setNodes]);
+  }, [fitView, getViewport, graphData, layoutEngine, layoutNonce, matchedNodeIds, scheduleRender, setNodes, syncViewportMode, syncZoomLevel, updateEdgeScene]);
+
+  const handleToggleExpand = useCallback((nodeId) => {
+    setExpandedNodeIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(nodeId)) {
+        nextIds.delete(nodeId);
+      } else {
+        nextIds.add(nodeId);
+      }
+
+      return nextIds;
+    });
+  }, []);
 
   useEffect(() => {
-    if (!graphData?.nodes?.length || baseGraph.nodes.length === 0) {
+    if (baseGraph.nodes.length === 0) {
       return;
     }
 
-    const decorated = decorateGraph(
-      baseGraph.nodes,
-      baseGraph.edges,
-      matchedNodeIds,
-      expandedNodeIds,
-      handleToggleExpand,
-      lowDetailMode
-    );
-    setNodes(
-      decorated.nodes.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          viewportMoving: isViewportMoving,
-        },
-      }))
-    );
-    setEdges(decorated.edges);
-  }, [baseGraph, expandedNodeIds, graphData, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, setEdges, setNodes]);
+    setNodes((currentNodes) => {
+      const nodesById = new Map(currentNodes.map((node) => [node.id, node]));
+      const nextNodes = decorateNodes(
+        baseGraph.nodes.map((node) => ({
+          ...node,
+          position: nodesById.get(node.id)?.position ?? node.position,
+        })),
+        matchedNodeIds,
+        expandedNodeIds,
+        handleToggleExpand,
+        lowDetailMode,
+        isViewportMoving
+      );
+
+      updateEdgeScene(nextNodes, baseGraph.edges, matchedNodeIds);
+      return nextNodes;
+    });
+  }, [baseGraph, expandedNodeIds, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, setNodes, updateEdgeScene]);
+
+  useEffect(() => {
+    if (nodes.length === 0 && baseGraph.edges.length === 0) {
+      return;
+    }
+
+    updateEdgeScene(nodes, baseGraph.edges, matchedNodeIds);
+  }, [baseGraph.edges, matchedNodeIds, nodes, updateEdgeScene]);
+
+  const handleNodesChange = useCallback((changes) => {
+    onNodesChange(changes);
+    window.requestAnimationFrame(() => {
+      scheduleRender();
+    });
+  }, [onNodesChange, scheduleRender]);
 
   const handleExport = async () => {
-    const viewport = document.querySelector('.react-flow__viewport');
+    const viewport = flowShellRef.current;
     if (!viewport || nodes.length === 0) {
       return;
     }
@@ -643,6 +1419,11 @@ function GraphCanvas() {
 
   const handleResetViewport = () => {
     setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 220 });
+    const viewport = { x: 0, y: 0, zoom: 1 };
+    viewportRef.current = viewport;
+    syncViewportMode(viewport);
+    syncZoomLevel(viewport);
+    scheduleRender();
   };
 
   const totalNodes = graphData?.nodes?.length ?? 0;
@@ -696,7 +1477,7 @@ function GraphCanvas() {
         <div className="graph-stat"><span>Nodes</span><strong>{graphData?.nodes?.length ?? 0}</strong></div>
         <div className="graph-stat"><span>Edges</span><strong>{graphData?.edges?.length ?? 0}</strong></div>
         <div className="graph-stat"><span>Zoom</span><strong>{zoomLevel}%</strong></div>
-        <div className="graph-stat"><span>Layout</span><strong>{layoutEngine.toUpperCase()}</strong></div>
+        <div className="graph-stat"><span>Renderer</span><strong>{rendererMode}</strong></div>
       </div>
 
       {isLayouting ? (
@@ -709,51 +1490,81 @@ function GraphCanvas() {
         </div>
       ) : null}
 
-      <ReactFlow
-        className="graph-flow"
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onMove={(_, viewport) => {
-          const nextIsZooming = Math.abs(viewport.zoom - viewportZoomRef.current) > 0.0001;
-          viewportZoomRef.current = viewport.zoom;
-          setViewportMovingState(nextIsZooming);
-          syncViewportMode(viewport);
-        }}
-        onMoveEnd={(_, viewport) => {
-          setViewportMovingState(false);
-          if (viewport) {
+      <div ref={flowShellRef} className="graph-flow-shell">
+        <canvas ref={edgeCanvasRef} className="graph-edge-layer" />
+        <canvas ref={arrowCanvasRef} className="graph-edge-arrows" />
+        <ReactFlow
+          className="graph-flow"
+          nodes={nodes}
+          edges={[]}
+          nodeTypes={nodeTypes}
+          onNodesChange={handleNodesChange}
+          nodesDraggable
+          onMove={(_, viewport) => {
+            const nextIsZooming = Math.abs(viewport.zoom - viewportZoomRef.current) > 0.0001;
             viewportZoomRef.current = viewport.zoom;
+            viewportRef.current = viewport;
+            setViewportMovingState(nextIsZooming);
             syncViewportMode(viewport);
-            syncZoomLevel(viewport);
-          }
-        }}
-        onNodeDoubleClick={(_, node) => {
-          vscode.postMessage({
-            type: 'nodeClicked',
-            data: { nodeId: node.id },
-          });
-        }}
-        fitView
-        minZoom={0.1}
-        maxZoom={2.5}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background gap={24} size={1.2} />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={(node) => (node.data?.isDimmed ? 'rgba(128, 128, 128, 0.32)' : 'rgba(14, 99, 156, 0.85)')}
-          nodeStrokeColor={(node) => (node.data?.isDimmed ? 'rgba(145, 145, 145, 0.38)' : 'rgba(208, 238, 255, 0.72)')}
-          nodeStrokeWidth={1.6}
-          maskColor="rgba(2, 10, 24, 0.42)"
-          maskStrokeColor="rgba(126, 217, 255, 0.98)"
-          maskStrokeWidth={2.4}
-          offsetScale={8}
-        />
-      </ReactFlow>
+            scheduleRender();
+          }}
+          onMoveEnd={(_, viewport) => {
+            setViewportMovingState(false);
+            if (viewport) {
+              viewportZoomRef.current = viewport.zoom;
+              viewportRef.current = viewport;
+              syncViewportMode(viewport);
+              syncZoomLevel(viewport);
+              scheduleRender();
+            }
+          }}
+          onNodeDoubleClick={(_, node) => {
+            vscode.postMessage({
+              type: 'nodeClicked',
+              data: { nodeId: node.id },
+            });
+          }}
+          fitView
+          minZoom={0.1}
+          maxZoom={2.5}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background gap={24} size={1.2} />
+          <MiniMap
+            pannable
+            zoomable
+            onClick={(_, position) => {
+              const zoom = viewportRef.current.zoom;
+              const stageWidth = sizeRef.current.width / zoom;
+              const stageHeight = sizeRef.current.height / zoom;
+              const bounds = computeWorldBounds(nodes);
+              const padding = 40;
+              const minWorldX = bounds.x - padding;
+              const minWorldY = bounds.y - padding;
+              const maxWorldX = Math.max(minWorldX, bounds.x + bounds.width + padding - stageWidth);
+              const maxWorldY = Math.max(minWorldY, bounds.y + bounds.height + padding - stageHeight);
+              const nextWorldLeft = clamp(position.x - (stageWidth / 2), minWorldX, maxWorldX);
+              const nextWorldTop = clamp(position.y - (stageHeight / 2), minWorldY, maxWorldY);
+              const nextViewport = {
+                x: -(nextWorldLeft * zoom),
+                y: -(nextWorldTop * zoom),
+                zoom,
+              };
+
+              viewportRef.current = nextViewport;
+              setViewport(nextViewport, { duration: 180 });
+              scheduleRender();
+            }}
+            nodeColor={(node) => (node.data?.isDimmed ? 'rgba(128, 128, 128, 0.32)' : 'rgba(14, 99, 156, 0.85)')}
+            nodeStrokeColor={(node) => (node.data?.isDimmed ? 'rgba(145, 145, 145, 0.38)' : 'rgba(208, 238, 255, 0.72)')}
+            nodeStrokeWidth={1.6}
+            maskColor="rgba(2, 10, 24, 0.42)"
+            maskStrokeColor="rgba(126, 217, 255, 0.98)"
+            maskStrokeWidth={2.4}
+            offsetScale={8}
+          />
+        </ReactFlow>
+      </div>
     </div>
   );
 }
