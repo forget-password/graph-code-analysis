@@ -1,12 +1,23 @@
 {
-  "name": "vscode-code-analysis",
-  "displayName": "Code Analysis Graph",
+  "name": "graph-code-analysis",
+  "displayName": "GraphIt: Code Analysis",
   "description": "Visualize code dependencies and relationships with interactive canvas graph",
   "version": "0.1.0",
   "publisher": "your-publisher-name",
   "engines": {
     "vscode": "^1.95.0"
   },
+  "keywords": [
+    "graph",
+    "architecture",
+    "dependency",
+    "diagram",
+    "visualization",
+    "react flow",
+    "uml",
+    "map",
+    "code analysis"
+  ],
   "categories": [
     "Visualization",
     "Other"
