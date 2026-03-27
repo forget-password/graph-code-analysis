@@ -28,14 +28,17 @@ export class VueFileInterpreter implements ScriptFileInterpreter {
     prepare(filePath: string, content: string): PreparedScriptFile {
         const blocks = this.extractScriptBlocks(content);
         const supportedBlocks = blocks.filter((block) => block.isSupported);
+        const hasScriptSetup = blocks.some((block) => block.isSetup);
 
         return {
             filePath,
             content: this.maskNonScriptContent(content, supportedBlocks),
             scriptKind: this.resolveScriptKind(supportedBlocks),
-            framework: blocks.some((block) => block.isSetup) ? 'vue3' : 'vue2',
-            componentName: path.basename(filePath, path.extname(filePath)),
-            hasScriptSetup: blocks.some((block) => block.isSetup),
+            metadata: {
+                componentName: path.basename(filePath, path.extname(filePath)),
+                hints: ['vue', hasScriptSetup ? 'vue3' : 'vue2'],
+                hasScriptSetup,
+            },
         };
     }
 

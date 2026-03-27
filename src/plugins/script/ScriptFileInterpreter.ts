@@ -1,6 +1,10 @@
 import * as ts from 'typescript';
 
-export type ScriptFramework = 'standard' | 'vue2' | 'vue3';
+export interface PreparedScriptMetadata {
+    componentName?: string;
+    hints?: string[];
+    [key: string]: unknown;
+}
 
 /**
  * 统一后的脚本文件表示
@@ -10,9 +14,7 @@ export interface PreparedScriptFile {
     filePath: string;
     content: string;
     scriptKind: ts.ScriptKind;
-    framework: ScriptFramework;
-    componentName?: string;
-    hasScriptSetup?: boolean;
+    metadata?: PreparedScriptMetadata;
 }
 
 /**

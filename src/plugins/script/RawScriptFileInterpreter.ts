@@ -18,7 +18,6 @@ export class RawScriptFileInterpreter implements ScriptFileInterpreter {
             filePath,
             content,
             scriptKind: this.getScriptKind(filePath),
-            framework: 'standard',
         };
     }
 
