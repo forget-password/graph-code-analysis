@@ -3,7 +3,7 @@
   "displayName": "GraphIt: Code Analysis",
   "description": "Visualize code dependencies and relationships with interactive canvas graph",
   "version": "0.1.0",
-  "publisher": "your-publisher-name",
+  "publisher": "mlown",
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -97,6 +97,8 @@
     }
   },
   "scripts": {
+    "publish": "vsce publish --no-dependencies",
+    "package": "vsce package --no-dependencies",
     "vscode:prepublish": "pnpm run build",
     "build": "pnpm run build:extension && pnpm run build:webview",
     "build:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node24",
