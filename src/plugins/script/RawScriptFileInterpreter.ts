@@ -7,7 +7,13 @@ import { PreparedScriptFile, ScriptFileInterpreter } from './ScriptFileInterpret
  */
 export class RawScriptFileInterpreter implements ScriptFileInterpreter {
     readonly id = 'raw-script';
-    readonly supportedExtensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+    readonly supportedExtensions: string[];
+
+    constructor(
+        supportedExtensions: string[] = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
+    ) {
+        this.supportedExtensions = supportedExtensions;
+    }
 
     canInterpret(filePath: string): boolean {
         return this.supportedExtensions.includes(path.extname(filePath).toLowerCase());

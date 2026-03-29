@@ -313,11 +313,13 @@ function sortExplorerChildren(children) {
 }
 
 function buildExplorerTree(graphData) {
-  if (!graphData?.nodes?.length) {
+  const concreteNodes = graphData?.nodes?.filter((node) => !node.isVirtual) ?? [];
+
+  if (!concreteNodes.length) {
     return null;
   }
 
-  const rootPath = getCommonFolderPath(graphData.nodes.map((node) => node.filePath));
+  const rootPath = getCommonFolderPath(concreteNodes.map((node) => node.filePath));
   const root = {
     id: rootPath || '__workspace__',
     type: 'folder',
@@ -328,7 +330,7 @@ function buildExplorerTree(graphData) {
   };
   const folderMap = new Map([[root.path || '__workspace__', root]]);
 
-  graphData.nodes
+  concreteNodes
     .slice()
     .sort((left, right) => left.filePath.localeCompare(right.filePath))
     .forEach((node) => {

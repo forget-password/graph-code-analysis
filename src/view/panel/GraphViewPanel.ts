@@ -111,6 +111,11 @@ export class GraphViewPanel {
      * 处理节点点击
      */
     private async handleNodeClick(data: { nodeId: string }): Promise<void> {
+        if (data.nodeId.startsWith('external:')) {
+            vscode.window.showInformationMessage(`External dependency: ${data.nodeId.replace(/^external:[^:]+:/, '')}`);
+            return;
+        }
+
         try {
             const document = await vscode.workspace.openTextDocument(data.nodeId);
             await vscode.window.showTextDocument(document);

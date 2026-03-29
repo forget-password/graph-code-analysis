@@ -53,6 +53,14 @@ export class PluginManager {
     }
 
     /**
+     * 清空所有分析器
+     */
+    clear(): void {
+        this.analyzers.clear();
+        this.configs.clear();
+    }
+
+    /**
      * 获取语言分析器
      */
     getAnalyzer(analyzerId: string): ILanguageAnalyzer | undefined {

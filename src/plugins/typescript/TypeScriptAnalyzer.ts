@@ -20,6 +20,14 @@ import {
     DependencyType,
     FileAnalysisResult,
 } from '../../core/types';
+import { LanguageRuleConfig, PathAliasConfig } from '../../config/types';
+
+interface TypeScriptAnalyzerOptions {
+    extensions?: string[];
+    rootMarkers?: string[];
+    pathAliases?: PathAliasConfig[];
+    frameworks?: string[];
+}
 
 /**
  * TypeScript/JavaScript 系脚本分析器
@@ -29,24 +37,31 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
     readonly id = 'typescript';
     readonly name = 'TypeScript/JavaScript Analyzer';
     readonly supportedExtensions: string[];
+    private readonly rootMarkers: string[];
+    private readonly pathAliases: PathAliasConfig[];
     private readonly resolvedImportCache: Map<string, string | null> = new Map();
     private readonly fileExistsCache: Map<string, boolean> = new Map();
     private readonly projectRootCache: Map<string, string | null> = new Map();
-    private readonly interpreters: ScriptFileInterpreter[] = [
-        new VueFileInterpreter(),
-        new RawScriptFileInterpreter(),
-    ];
-    private readonly frameworkAnalyzers: TypeScriptFrameworkAnalyzer[] = [
-        new VueFrameworkAnalyzer(),
-        new ReactFrameworkAnalyzer(),
-    ];
+    private readonly interpreters: ScriptFileInterpreter[];
+    private readonly frameworkAnalyzers: TypeScriptFrameworkAnalyzer[];
     private readonly utils = new TypeScriptAnalysisUtils();
 
-    constructor() {
+    constructor(config?: TypeScriptAnalyzerOptions | LanguageRuleConfig) {
         super();
-        this.supportedExtensions = Array.from(
-            new Set(this.interpreters.flatMap((interpreter) => interpreter.supportedExtensions))
-        );
+        const options = this.resolveOptions(config);
+        const rawScriptExtensions = options.extensions
+            .filter((extension) => extension !== '.vue');
+        this.pathAliases = options.pathAliases;
+        this.rootMarkers = options.rootMarkers;
+        this.interpreters = [
+            ...(options.extensions.includes('.vue') ? [new VueFileInterpreter()] : []),
+            new RawScriptFileInterpreter(rawScriptExtensions),
+        ];
+        this.frameworkAnalyzers = [
+            ...(options.frameworks.includes('vue') ? [new VueFrameworkAnalyzer()] : []),
+            ...(options.frameworks.includes('react') ? [new ReactFrameworkAnalyzer()] : []),
+        ];
+        this.supportedExtensions = Array.from(new Set(options.extensions));
     }
 
     async analyzeFile(
@@ -190,12 +205,16 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
             return [];
         }
 
-        if (importPath.startsWith('@/')) {
-            return [path.join(projectRoot, 'src', importPath.slice(2))];
-        }
+        for (const alias of this.pathAliases) {
+            if (!importPath.startsWith(alias.prefix)) {
+                continue;
+            }
 
-        if (importPath.startsWith('~/')) {
-            return [path.join(projectRoot, importPath.slice(2))];
+            const remainder = importPath.slice(alias.prefix.length);
+            const targetBase = alias.base === 'currentDir'
+                ? currentDir
+                : projectRoot;
+            return [path.join(targetBase, alias.target, remainder)];
         }
 
         return [];
@@ -214,7 +233,7 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
 
             visitedDirs.push(currentDir);
 
-            for (const marker of ['package.json', 'tsconfig.json', 'jsconfig.json', '.git']) {
+            for (const marker of this.rootMarkers) {
                 if (await this.fileExists(path.join(currentDir, marker))) {
                     visitedDirs.forEach((dir) => this.projectRootCache.set(dir, currentDir));
                     return currentDir;
@@ -229,6 +248,23 @@ export class TypeScriptAnalyzer extends BaseLanguageAnalyzer {
 
             currentDir = parentDir;
         }
+    }
+
+    private resolveOptions(config?: TypeScriptAnalyzerOptions | LanguageRuleConfig): Required<TypeScriptAnalyzerOptions> {
+        const extensions = config?.extensions ?? ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue'];
+        const rootMarkers = config?.rootMarkers ?? ['package.json', 'tsconfig.json', 'jsconfig.json', '.git'];
+        const pathAliases = config?.pathAliases ?? [
+            { prefix: '@/', target: 'src', base: 'projectRoot' },
+            { prefix: '~/', target: '', base: 'projectRoot' },
+        ];
+        const frameworks = config?.frameworks ?? ['vue', 'react'];
+
+        return {
+            extensions,
+            rootMarkers,
+            pathAliases,
+            frameworks,
+        };
     }
 
     private createImportDependency(filePath: string, resolvedPath: string): Dependency {

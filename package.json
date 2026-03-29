@@ -32,6 +32,14 @@
       {
         "command": "codeAnalysis.openGraph",
         "title": "Code Analysis: Open Dependency Graph"
+      },
+      {
+        "command": "codeAnalysis.openLanguageConfig",
+        "title": "Code Analysis: Open Language Config"
+      },
+      {
+        "command": "codeAnalysis.reloadLanguageConfig",
+        "title": "Code Analysis: Reload Language Config"
       }
     ],
     "configuration": {
@@ -56,6 +64,11 @@
           "default": 8,
           "minimum": 1,
           "description": "Number of files analyzed in parallel"
+        },
+        "codeAnalysis.languageConfigPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional custom path for the language rule config file. Defaults to ~/config/.code-analysis/languages.json"
         },
         "codeAnalysis.theme": {
           "type": "string",

@@ -101,6 +101,8 @@ export interface GraphNode {
     collapsed: boolean;
     /** 文件路径 */
     filePath: string;
+    /** 是否为虚拟节点（例如外部依赖） */
+    isVirtual?: boolean;
 }
 
 /**

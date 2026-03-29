@@ -1,38 +1,41 @@
 # Code Analysis Graph
 
-A powerful VSCode extension that visualizes code dependencies and relationships with an interactive canvas graph.
+这是一个功能强大的 VSCode 扩展，用交互式画布图谱来展示代码之间的依赖关系与结构关联。
 
-## 🌟 Features
+## 🌟 功能特性
 
-- 📁 **Folder Analysis**: Analyze entire project folders to extract code structure
-- 🔍 **Language Support**: Built-in support for TypeScript, JavaScript, Vue 2, Vue 3, React Hooks, React Class, and more
-- 🎨 **Interactive Graph**: Visualize code dependencies with draggable nodes and connections
-- 🔗 **Smart Navigation**: Click on nodes to jump directly to code definitions
-- 🔌 **Plugin Architecture**: Extensible design for adding new language support
-- ⚡ **Performance**: Efficient caching and incremental analysis
+- 📁 **文件夹分析**：分析整个项目目录，提取代码结构信息
+- 🔍 **语言支持**：内置支持 TypeScript、JavaScript、Vue 2、Vue 3、React Hooks、React Class 等语言与框架
+- 🏠 **Home 配置**：语言解析规则会生成到用户主目录，无需修改扩展代码即可扩展
+- 🎨 **交互式图谱**：通过可拖拽节点和连接线可视化代码依赖关系
+- 🔗 **智能跳转**：点击节点可直接跳转到代码定义位置
+- 🔌 **插件化架构**：可扩展设计，便于后续接入更多语言支持
+- ⚡ **性能优化**：支持高效缓存与增量分析
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
-### Installation
+### 安装
 
-1. Install from VSCode Marketplace (coming soon)
-2. Or install from VSIX file
+1. 从 VSCode Marketplace 安装（即将上线）
+2. 或通过 VSIX 文件安装
 
-### Usage
+### 使用方式
 
-1. Open Command Palette (`Cmd+Shift+P` on Mac, `Ctrl+Shift+P` on Windows/Linux)
-2. Run command: `Code Analysis: Analyze Folder`
-3. Select the folder you want to analyze
-4. View the dependency graph in the opened panel
+1. 打开命令面板（Mac 为 `Cmd+Shift+P`，Windows/Linux 为 `Ctrl+Shift+P`）
+2. 执行命令：`Code Analysis: Analyze Folder`
+3. 选择需要分析的文件夹
+4. 在打开的面板中查看依赖关系图谱
 
-## 📋 Commands
+## 📋 命令列表
 
-- `Code Analysis: Analyze Folder` - Analyze a folder and generate dependency graph
-- `Code Analysis: Open Dependency Graph` - Open the graph view panel
+- `Code Analysis: Analyze Folder` - 分析指定文件夹并生成依赖图
+- `Code Analysis: Open Dependency Graph` - 打开图谱视图面板
+- `Code Analysis: Open Language Config` - 打开用户主目录中的语言规则文件
+- `Code Analysis: Reload Language Config` - 无需重启 VSCode 即可重新加载语言规则
 
-## ⚙️ Configuration
+## ⚙️ 配置说明
 
-Configure the extension in your VSCode settings:
+可以在 VSCode 设置中配置该扩展：
 
 ```json
 {
@@ -42,103 +45,134 @@ Configure the extension in your VSCode settings:
     "**/.git/**"
   ],
   "codeAnalysis.maxDepth": 10,
+  "codeAnalysis.languageConfigPath": "",
   "codeAnalysis.theme": "auto",
   "codeAnalysis.layout": "radial"
 }
 ```
 
-### Configuration Options
+### 配置项
 
-- `codeAnalysis.excludePatterns`: Patterns to exclude from analysis
-- `codeAnalysis.maxDepth`: Maximum depth for file traversal
-- `codeAnalysis.theme`: Graph theme (`light`, `dark`, or `auto`)
-- `codeAnalysis.layout`: Default graph layout algorithm (`radial`, `dagre`, `force`, or `circular`)
+- `codeAnalysis.excludePatterns`：分析时需要排除的路径模式
+- `codeAnalysis.maxDepth`：文件遍历的最大深度
+- `codeAnalysis.languageConfigPath`：可选的自定义语言规则文件路径。留空时默认使用 `~/config/.code-analysis/languages.json`
+- `codeAnalysis.theme`：图谱主题，可选 `light`、`dark` 或 `auto`
+- `codeAnalysis.layout`：默认图谱布局算法，可选 `radial`、`dagre`、`force` 或 `circular`
 
-## 🎯 Roadmap
+## 🏠 主目录语言配置
 
-### Phase 1: Core Features ✅
-- [x] Project initialization
-- [x] Plugin architecture
-- [x] TypeScript/JavaScript analyzer
-- [x] Basic graph data structure
-- [x] Command handlers
-- [x] Webview panel
+扩展首次激活时会自动创建：
 
-### Phase 2: Graph Visualization (In Progress)
-- [ ] JointJS integration
-- [ ] Node rendering with file information
-- [ ] Orthogonal (right-angle) connections
-- [ ] Drag and drop functionality
-- [ ] Zoom and pan controls
+```text
+~/config/.code-analysis/languages.json
+```
 
-### Phase 3: Advanced Features
-- [ ] Click-to-navigate functionality
-- [ ] Search and filter
-- [ ] Export to PNG/SVG
-- [ ] Layout persistence
-- [ ] Performance optimization
+这个文件包含内置语言规则，也是后续扩展更多语言的主要入口。
 
-### Phase 4: Language Extensions
-- [x] Vue 2 / Vue 3 file interpretation
-- [x] React Hooks / React Class component analysis
-- [ ] Flutter/Dart support
-- [ ] Golang support
+- `typescript` 保留了针对 Vue / React / JS / TS 的专用 AST 分析器
+- `java`、`golang`、`rust`、`c`、`cpp`、`zig`、`csharp` 使用可配置的正则规则
+- 新语言可以通过向 `languages` 数组追加对象的方式接入
+- 已有语言也可以通过编辑 `extensions`、`rootMarkers`、`declarationRules` 和 `dependencyRules` 来禁用或微调
 
-## 🛠️ Development
+示例结构如下：
 
-### Prerequisites
+```json
+{
+  "version": 1,
+  "languages": [
+    {
+      "id": "golang",
+      "name": "Go",
+      "analyzer": "regex",
+      "enabled": true,
+      "extensions": [".go"],
+      "rootMarkers": ["go.mod", ".git"],
+      "declarationRules": [
+        {
+          "pattern": "^\\s*func\\s*(?:\\([^)]+\\)\\s*)?(?<name>[A-Za-z_][\\w]*)\\s*\\(",
+          "flags": "gm",
+          "kind": "function"
+        }
+      ],
+      "dependencyRules": [
+        {
+          "pattern": "^\\s*import\\s+\"(?<path>[^\"]+)\"",
+          "flags": "gm",
+          "resolver": "goModule",
+          "candidateExtensions": [".go"],
+          "allowExternal": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+### 规则字段说明
+
+- `analyzer`：分析器类型，支持 `typescript` 或 `regex`
+- `extensions`：归属于该语言的文件扩展名
+- `rootMarkers`：用于识别项目根目录的文件标记
+- `declarationRules`：用于提取 `class`、`interface`、`function`、`enum` 等代码元素的正则规则
+- `dependencyRules`：用于生成依赖边的正则规则
+- `resolver`：依赖路径映射到文件的方式，例如 `relative`、`packageToPath`、`goModule`、`rustModule` 或 `external`
+- `allowExternal`：当本地解析失败时，是否将该依赖保留为图中的外部虚拟节点
+
+## 🛠️ 开发说明
+
+### 环境要求
 
 - Node.js v24.3.0
 - pnpm 10.28.0
 
-### Setup
+### 初始化
 
 ```bash
-# Clone the repository
+# 克隆仓库
 git clone <repository-url>
 cd vscode-code-analysis
 
-# Install dependencies
+# 安装依赖
 pnpm install
 
-# Build the extension
+# 构建扩展
 pnpm run build
 
-# Watch mode for development
+# 开发监听模式
 pnpm run watch
 ```
 
-### Testing
+### 测试
 
-Press `F5` in VSCode to open a new Extension Development Host window with the extension loaded.
+在 VSCode 中按下 `F5`，即可打开一个新的 Extension Development Host 窗口，并加载当前扩展。
 
-## 🏗️ Architecture
+## 🏗️ 项目结构
 
-```
+```text
 src/
-├── extension.ts              # Extension entry point
-├── commands/                 # Command handlers
-├── core/                     # Core logic
-│   ├── analyzer/            # Code analysis
-│   ├── parser/              # Language parsers
-│   ├── graph/               # Graph data structures
-│   └── types.ts             # Type definitions
-├── plugins/                  # Language plugins
-│   ├── base/                # Base analyzer class
-│   ├── typescript/          # TypeScript support
-│   └── ...                  # Other languages
-└── view/                     # UI components
-    └── panel/               # Webview panels
+├── extension.ts              # 扩展入口
+├── commands/                 # 命令处理
+├── core/                     # 核心逻辑
+│   ├── analyzer/             # 代码分析
+│   ├── parser/               # 语言解析器
+│   ├── graph/                # 图数据结构
+│   └── types.ts              # 类型定义
+├── plugins/                  # 语言插件
+│   ├── base/                 # 分析器基类
+│   ├── typescript/           # TypeScript 支持
+│   └── ...                   # 其他语言
+└── view/                     # UI 组件
+    └── panel/                # Webview 面板
 ```
 
-## 📝 License
+## 📝 许可证
 
 MIT
 
-## 🤝 Contributing
+## 🤝 参与贡献
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+欢迎提交 Issue 和 Pull Request，一起完善这个项目。
 
-## 📧 Contact
+## 📧 联系方式
 
-For issues and feature requests, please use the GitHub issue tracker.
+如果你有问题反馈或功能建议，请通过 GitHub Issue Tracker 提交。

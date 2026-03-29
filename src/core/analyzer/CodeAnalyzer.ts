@@ -245,6 +245,7 @@ export class CodeAnalyzer {
         const nodes: GraphNode[] = [];
         const edges: GraphEdge[] = [];
         const seenEdges = new Set<string>();
+        const nodeIds = new Set<string>();
 
         // 创建节点
         for (const result of results) {
@@ -256,6 +257,7 @@ export class CodeAnalyzer {
                 collapsed: false,
                 filePath: result.filePath,
             });
+            nodeIds.add(result.filePath);
         }
 
         // 创建边（基于导入关系）
@@ -267,6 +269,20 @@ export class CodeAnalyzer {
                 }
 
                 seenEdges.add(edgeKey);
+
+                if (!nodeIds.has(importDep.to.filePath)) {
+                    nodes.push({
+                        id: importDep.to.filePath,
+                        label: importDep.to.name,
+                        position: { x: 0, y: 0 },
+                        elements: [],
+                        collapsed: false,
+                        filePath: importDep.to.filePath,
+                        isVirtual: true,
+                    });
+                    nodeIds.add(importDep.to.filePath);
+                }
+
                 edges.push({
                     id: importDep.id,
                     source: {
