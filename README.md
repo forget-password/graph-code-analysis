@@ -1,4 +1,6 @@
-# Code Analysis Graph
+# GraphIt: Code Analysis Graph
+
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/forget-password/graph-code-analysis)
 
 这是一个功能强大的 VSCode 扩展，用交互式画布图谱来展示代码之间的依赖关系与结构关联。
 
@@ -132,8 +134,8 @@
 
 ```bash
 # 克隆仓库并安装依赖
-git clone <repository-url>
-cd vscode-code-analysis
+git clone https://github.com/forget-password/graph-code-analysis.git
+cd graph-code-analysis
 pnpm install
 
 # 编译扩展和 Webview UI
@@ -181,8 +183,9 @@ MIT
 
 ## 🤝 参与贡献
 
-欢迎提交 Issue 和 Pull Request，一起完善这个项目。
+欢迎提交 Issue 和 Pull Request，一起完善这个项目：
+[https://github.com/forget-password/graph-code-analysis](https://github.com/forget-password/graph-code-analysis)
 
 ## 📧 联系方式
 
-如果你有问题反馈或功能建议，请通过 GitHub Issue Tracker 提交。
+如果你有问题反馈或功能建议，请通过 [GitHub Issue Tracker](https://github.com/forget-password/graph-code-analysis/issues) 提交。
