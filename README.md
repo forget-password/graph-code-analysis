@@ -2,6 +2,8 @@
 
 [![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/forget-password/graph-code-analysis)
 
+[English](./README_EN.md) | [简体中文](./README.md)
+
 这是一个功能强大的 VSCode 扩展，用交互式画布图谱来展示代码之间的依赖关系与结构关联。
 
 ## 🌟 功能特性
