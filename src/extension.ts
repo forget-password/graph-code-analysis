@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs/promises';
 import { analyzeFolderCommand, openGraphCommand } from './commands';
 import { LanguageConfigManager } from './config/LanguageConfigManager';
 import { LanguageRuleConfig } from './config/types';
 import { PluginManager } from './core/PluginManager';
 import { ConfigurableRegexAnalyzer } from './plugins/configurable/ConfigurableRegexAnalyzer';
 import { TypeScriptAnalyzer } from './plugins/typescript/TypeScriptAnalyzer';
+import { SidebarProvider } from './view/SidebarProvider';
 
 let activeFileWatcher: vscode.FileSystemWatcher | undefined;
 
@@ -14,19 +17,18 @@ let activeFileWatcher: vscode.FileSystemWatcher | undefined;
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Code Analysis extension is now active!');
 
+    // 注册左侧边栏 SidebarProvider
+    const sidebarProvider = new SidebarProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider)
+    );
+
     let languageConfigManager = createLanguageConfigManager();
     await reloadLanguageAnalyzers(languageConfigManager);
     await rebuildFileWatcher();
-
-    const analyzeFolderCmd = vscode.commands.registerCommand(
-        'codeAnalysis.analyzeFolder',
-        () => analyzeFolderCommand(context)
-    );
-
-    const openGraphCmd = vscode.commands.registerCommand(
-        'codeAnalysis.openGraph',
-        () => openGraphCommand(context)
-    );
+    // 注册命令
+    const analyzeFolderCmd = vscode.commands.registerCommand('codeAnalysis.analyzeFolder', (uri?: vscode.Uri) => analyzeFolderCommand(context, uri));
+    const openGraphCmd = vscode.commands.registerCommand('codeAnalysis.openGraph', () => openGraphCommand(context));
 
     const openLanguageConfigCmd = vscode.commands.registerCommand(
         'codeAnalysis.openLanguageConfig',

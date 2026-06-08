@@ -5,14 +5,18 @@ import { GraphViewPanel } from '../view/panel/GraphViewPanel';
 /**
  * 分析文件夹命令
  */
-export async function analyzeFolderCommand(context: vscode.ExtensionContext): Promise<void> {
+export async function analyzeFolderCommand(context: vscode.ExtensionContext, uri?: vscode.Uri): Promise<void> {
+    let folderUri = uri ? [uri] : undefined;
+
     // 选择文件夹
-    const folderUri = await vscode.window.showOpenDialog({
-        canSelectFiles: false,
-        canSelectFolders: true,
-        canSelectMany: false,
-        openLabel: 'Select Folder to Analyze',
-    });
+    if (!folderUri) {
+        folderUri = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            openLabel: 'Select Folder to Analyze',
+        });
+    }
 
     if (!folderUri || folderUri.length === 0) {
         return;

@@ -19,7 +19,7 @@ import {
  */
 export class CodeAnalyzer {
   private pluginManager: PluginManager;
-  private analysisCache: Map<string, FileAnalysisResult> = new Map();
+  private analysisCache: Map<string, { mtimeMs: number; result: FileAnalysisResult }> = new Map();
   private readonly defaultConcurrency = Math.max(4, Math.min(os.cpus().length || 4, 12));
 
   constructor() {
@@ -60,20 +60,22 @@ export class CodeAnalyzer {
    * 分析单个文件
    */
   async analyzeFile(filePath: string): Promise<FileAnalysisResult | null> {
-    // 检查缓存
-    const cached = this.analysisCache.get(filePath);
-    if (cached) {
-      return cached;
-    }
-
-    // 获取合适的分析器
-    const analyzer = this.pluginManager.getAnalyzerForFile(filePath);
-    if (!analyzer) {
-      console.log(`No analyzer found for file: ${filePath}`);
-      return null;
-    }
-
     try {
+      const stat = await fs.stat(filePath);
+      
+      // 检查缓存
+      const cached = this.analysisCache.get(filePath);
+      if (cached && cached.mtimeMs === stat.mtimeMs) {
+        return cached.result;
+      }
+
+      // 获取合适的分析器
+      const analyzer = this.pluginManager.getAnalyzerForFile(filePath);
+      if (!analyzer) {
+        // console.log(`No analyzer found for file: ${filePath}`);
+        return null;
+      }
+
       // 直接读取文本，避免为大批量文件创建 VS Code 文档实例
       const content = await fs.readFile(filePath, 'utf8');
 
@@ -81,7 +83,7 @@ export class CodeAnalyzer {
       const result = await analyzer.analyzeFile(filePath, content);
 
       // 缓存结果
-      this.analysisCache.set(filePath, result);
+      this.analysisCache.set(filePath, { mtimeMs: stat.mtimeMs, result });
 
       return result;
     } catch (error) {
@@ -182,16 +184,29 @@ export class CodeAnalyzer {
       return /^$/;
     }
 
+    // handle **/dir/** pattern efficiently
+    if (normalizedPattern.startsWith('**/') && normalizedPattern.endsWith('/**')) {
+      const middle = normalizedPattern.slice(3, -3);
+      if (!middle.includes('/') && !middle.includes('*')) {
+        const escapedSegment = middle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|/)${escapedSegment}(?:/|$)`);
+      }
+    }
+
     // Plain segment names like "dist" exclude that directory/file segment and everything below it.
     if (!normalizedPattern.includes('/') && !normalizedPattern.includes('*')) {
       const escapedSegment = normalizedPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(`(?:^|/)${escapedSegment}(?:/|$)`);
     }
 
-    const escapedGlob = normalizedPattern
-      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*\*/g, '.*')
-      .replace(/\*/g, '[^/]*');
+    let escapedGlob = normalizedPattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    escapedGlob = escapedGlob.replace(/\*\*/g, '___GLOBSTAR___');
+    escapedGlob = escapedGlob.replace(/\*/g, '[^/]*');
+    escapedGlob = escapedGlob.replace(/___GLOBSTAR___/g, '.*');
+    
+    // Make leading **/ and trailing /** optional so it matches bare directories at root
+    escapedGlob = escapedGlob.replace(/^\\.\\*\\\//, '(?:.*/)?');
+    escapedGlob = escapedGlob.replace(/\\\/\\.\\*$/, '(?:/.*)?');
 
     return new RegExp(`^${escapedGlob}$`);
   }

@@ -43,6 +43,24 @@
         "title": "Code Analysis: Reload Language Config"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "graph-code-analysis-sidebar",
+          "title": "Code Analysis",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "graph-code-analysis-sidebar": [
+        {
+          "type": "webview",
+          "id": "graph-code-analysis.sidebar",
+          "name": "Project Graph"
+        }
+      ]
+    },
     "configuration": {
       "title": "Code Analysis",
       "properties": {
@@ -51,6 +69,10 @@
           "default": [
             "**/node_modules/**",
             "**/build/**",
+            "**/dist/**",
+            "**/.output/**",
+            "**/.vscode/**",
+            "**/coverage/**",
             "**/.git/**"
           ],
           "description": "Patterns to exclude from analysis"
