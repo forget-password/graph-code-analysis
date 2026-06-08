@@ -518,12 +518,41 @@ function decorateNodes(
   onFocusInTree,
   lowDetailMode,
   viewportMoving,
+  hoveredNodeId = null,
+  edges = []
 ) {
   const hasSearch = matchedIds !== null;
+  const hasHover = hoveredNodeId !== null;
+  const connectedNodeIds = new Set();
+
+  if (hasHover) {
+    connectedNodeIds.add(hoveredNodeId);
+    edges.forEach((edge) => {
+      if (edge.source === hoveredNodeId) connectedNodeIds.add(edge.target);
+      if (edge.target === hoveredNodeId) connectedNodeIds.add(edge.source);
+    });
+  }
 
   return nodes.map((node) => {
-    const isMatched = !hasSearch || matchedIds.has(node.id);
+    let isDimmed = false;
+    let isMatched = true;
+
+    if (hasSearch) {
+      isMatched = matchedIds.has(node.id);
+      if (!isMatched) isDimmed = true;
+    }
+
+    if (hasHover) {
+      if (!connectedNodeIds.has(node.id)) {
+        isDimmed = true;
+      } else {
+        isDimmed = false;
+      }
+    }
+
     const expanded = expandedNodeIds.has(node.id);
+    // Dimmed nodes should have lower opacity
+    const finalOpacity = isDimmed ? 0.3 : 1;
 
     return {
       ...node,
@@ -532,12 +561,12 @@ function decorateNodes(
         height: lowDetailMode
           ? node.data.minimalHeight
           : (expanded ? node.data.expandedHeight : node.data.collapsedHeight),
-        opacity: isMatched ? 1 : 0.3,
+        opacity: finalOpacity,
       },
       data: {
         ...node.data,
         expanded,
-        isDimmed: !isMatched,
+        isDimmed,
         lowDetailMode,
         viewportMoving,
         onToggleExpand,
@@ -759,11 +788,23 @@ function buildOrthogonalRoute(sourceNode, targetNode) {
   ]);
 }
 
-function buildEdgeScene(nodes, edges, matchedNodeIds) {
+function buildEdgeScene(nodes, edges, matchedNodeIds, hoveredNodeId = null) {
   const nodeMap = new Map(nodes.map((node) => [node.id, toWorldNode(node)]));
   const hasSearch = matchedNodeIds !== null;
-  const segments = [];
-  const arrows = [];
+  const hasHover = hoveredNodeId !== null;
+  const normalSegments = [];
+  const highlightedSegments = [];
+  const normalArrows = [];
+  const highlightedArrows = [];
+
+  const connectedEdges = new Set();
+  if (hasHover) {
+    edges.forEach((edge) => {
+      if (edge.source === hoveredNodeId || edge.target === hoveredNodeId) {
+        connectedEdges.add(edge.id);
+      }
+    });
+  }
 
   edges.forEach((edge) => {
     const sourceNode = nodeMap.get(edge.source);
@@ -773,15 +814,30 @@ function buildEdgeScene(nodes, edges, matchedNodeIds) {
       return;
     }
 
-    const dimmed = hasSearch && !(matchedNodeIds.has(edge.source) && matchedNodeIds.has(edge.target));
+    let dimmed = false;
+    if (hasSearch) {
+      dimmed = !(matchedNodeIds.has(edge.source) && matchedNodeIds.has(edge.target));
+    }
+
+    if (hasHover) {
+      if (!connectedEdges.has(edge.id)) {
+        dimmed = true;
+      } else {
+        dimmed = false;
+      }
+    }
+
     const opacity = dimmed ? 0.1 : edge.baseOpacity;
     const color = hexToRgba(edge.color, opacity);
     const route = buildOrthogonalRoute(sourceNode, targetNode);
 
+    const segmentsTarget = dimmed ? normalSegments : highlightedSegments;
+    const arrowsTarget = dimmed ? normalArrows : highlightedArrows;
+
     for (let index = 1; index < route.length; index += 1) {
       const previous = route[index - 1];
       const current = route[index];
-      segments.push({
+      segmentsTarget.push({
         x1: previous.x,
         y1: previous.y,
         x2: current.x,
@@ -792,7 +848,7 @@ function buildEdgeScene(nodes, edges, matchedNodeIds) {
     }
 
     if (route.length >= 2) {
-      arrows.push({
+      arrowsTarget.push({
         start: route[route.length - 2],
         end: route[route.length - 1],
         color,
@@ -800,7 +856,10 @@ function buildEdgeScene(nodes, edges, matchedNodeIds) {
     }
   });
 
-  return { segments, arrows };
+  return {
+    segments: [...normalSegments, ...highlightedSegments],
+    arrows: [...normalArrows, ...highlightedArrows],
+  };
 }
 
 function buildEdgeInstanceData(segments) {
@@ -1418,6 +1477,7 @@ function GraphCanvas() {
   const [zoomLevel, setZoomLevel] = useState(100);
   const [lowDetailMode, setLowDetailMode] = useState(false);
   const [rendererMode, setRendererMode] = useState('INIT');
+  const [hoveredNodeId, setHoveredNodeId] = useState(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const { fitView, getViewport, setViewport } = useReactFlow();
@@ -1439,6 +1499,7 @@ function GraphCanvas() {
   const viewportZoomRef = useRef(1);
   const movingTimerRef = useRef(null);
   const isDraggingRef = useRef(false);
+  const hoverTimerRef = useRef(null);
   const lastEdgeRebuildRef = useRef(0);
   const searchBlurTimerRef = useRef(null);
   const suggestionsRef = useRef(null);
@@ -1595,8 +1656,8 @@ function GraphCanvas() {
     }
   }, []);
 
-  const updateEdgeScene = useCallback((nextNodes, nextEdges, nextMatchedIds) => {
-    const scene = buildEdgeScene(nextNodes, nextEdges, nextMatchedIds);
+  const updateEdgeScene = useCallback((nextNodes, nextEdges, nextMatchedIds, nextHoveredNodeId = null) => {
+    const scene = buildEdgeScene(nextNodes, nextEdges, nextMatchedIds, nextHoveredNodeId);
     sceneRef.current = scene;
     rendererRef.current?.updateScene(scene);
     scheduleRender();
@@ -1830,13 +1891,15 @@ function GraphCanvas() {
         handleToggleExpand,
         handleNodeFocusInTree,
         lowDetailMode,
-        isViewportMoving
+        isViewportMoving,
+        hoveredNodeId,
+        baseGraph.edges
       );
 
-      updateEdgeScene(nextNodes, baseGraph.edges, matchedNodeIds);
+      updateEdgeScene(nextNodes, baseGraph.edges, matchedNodeIds, hoveredNodeId);
       return nextNodes;
     });
-  }, [baseGraph, expandedNodeIds, handleNodeFocusInTree, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, setNodes, updateEdgeScene]);
+  }, [baseGraph, expandedNodeIds, handleNodeFocusInTree, handleToggleExpand, isViewportMoving, lowDetailMode, matchedNodeIds, hoveredNodeId, setNodes, updateEdgeScene]);
 
   // Edge scene is rebuilt by the decoration effect above and by handleNodesChange during drag.
   // No separate nodes-change effect needed — it caused double rebuilds on every drag frame.
@@ -2253,6 +2316,21 @@ function GraphCanvas() {
           }}
           onNodeClick={(_, node) => {
             handleNodeFocusInTree(node);
+          }}
+          onNodeMouseEnter={(_, node) => {
+            if (hoverTimerRef.current) {
+              clearTimeout(hoverTimerRef.current);
+              hoverTimerRef.current = null;
+            }
+            if (hoveredNodeId !== node.id) {
+              setHoveredNodeId(node.id);
+            }
+          }}
+          onNodeMouseLeave={() => {
+            hoverTimerRef.current = setTimeout(() => {
+              setHoveredNodeId(null);
+              hoverTimerRef.current = null;
+            }, 50);
           }}
           fitView
           minZoom={0.1}
