@@ -2,7 +2,7 @@
   "name": "graph-code-analysis",
   "displayName": "GraphIt: Code Analysis",
   "description": "Visualize code dependencies and relationships with interactive canvas graph",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "mlown",
   "engines": {
     "vscode": "^1.95.0"
