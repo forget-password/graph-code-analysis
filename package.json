@@ -99,6 +99,8 @@
   "scripts": {
     "publish": "vsce publish --no-dependencies",
     "package": "vsce package --no-dependencies",
+    "install:vsix": "code --install-extension ${npm_package_name}-${npm_package_version}.vsix",
+    "release": "npm version patch && pnpm run package && pnpm run install:vsix",
     "vscode:prepublish": "pnpm run build",
     "build": "pnpm run build:extension && pnpm run build:webview",
     "build:extension": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node24",
@@ -117,6 +119,7 @@
     "@typescript-eslint/eslint-plugin": "^8.20.0",
     "@typescript-eslint/parser": "^8.20.0",
     "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.24.2",
     "eslint": "^9.17.0",
     "prettier": "^3.4.2",
