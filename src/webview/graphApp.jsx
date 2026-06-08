@@ -170,7 +170,8 @@ function buildFlowNodes(graphData, direction) {
 
 function buildEdgeMetadata(graphData) {
   return graphData.edges.map((edge) => {
-    const color = EDGE_COLORS[edge.type] ?? '#8a8f98';
+    const isCircular = edge.isCircular;
+    const color = isCircular ? '#ff4d4f' : (EDGE_COLORS[edge.type] ?? '#8a8f98');
 
     return {
       id: edge.id,
@@ -178,8 +179,9 @@ function buildEdgeMetadata(graphData) {
       target: edge.target.nodeId,
       type: edge.type,
       color,
-      baseOpacity: 0.78,
-      strokeWidth: 1.7,
+      isCircular,
+      baseOpacity: isCircular ? 0.95 : 0.78,
+      strokeWidth: isCircular ? 2.5 : 1.7,
     };
   });
 }

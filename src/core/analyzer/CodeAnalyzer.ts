@@ -293,6 +293,8 @@ export class CodeAnalyzer {
       }
     }
 
+    this.detectCircularDependencies(nodes, edges);
+
     return {
       nodes,
       edges,
@@ -313,6 +315,86 @@ export class CodeAnalyzer {
 
     elements.forEach(visit);
     return flattened;
+  }
+
+  /**
+   * 检测循环依赖并标记相关连线
+   * 使用 Tarjan 的强连通分量 (SCC) 算法
+   */
+  private detectCircularDependencies(nodes: GraphNode[], edges: GraphEdge[]) {
+    const adjList = new Map<string, GraphEdge[]>();
+    for (const edge of edges) {
+      if (!adjList.has(edge.source.nodeId)) {
+        adjList.set(edge.source.nodeId, []);
+      }
+      adjList.get(edge.source.nodeId)!.push(edge);
+    }
+
+    let index = 0;
+    const indices = new Map<string, number>();
+    const lowlink = new Map<string, number>();
+    const onStack = new Set<string>();
+    const stack: string[] = [];
+    const sccs: Set<string>[] = [];
+
+    const strongconnect = (nodeId: string) => {
+      indices.set(nodeId, index);
+      lowlink.set(nodeId, index);
+      index++;
+      stack.push(nodeId);
+      onStack.add(nodeId);
+
+      const neighbors = adjList.get(nodeId) || [];
+      for (const edge of neighbors) {
+        const w = edge.target.nodeId;
+        if (!indices.has(w)) {
+          strongconnect(w);
+          lowlink.set(nodeId, Math.min(lowlink.get(nodeId)!, lowlink.get(w)!));
+        } else if (onStack.has(w)) {
+          lowlink.set(nodeId, Math.min(lowlink.get(nodeId)!, indices.get(w)!));
+        }
+      }
+
+      if (lowlink.get(nodeId) === indices.get(nodeId)) {
+        const scc = new Set<string>();
+        let w: string;
+        do {
+          w = stack.pop()!;
+          onStack.delete(w);
+          scc.add(w);
+        } while (w !== nodeId);
+        
+        if (scc.size > 1) {
+          sccs.push(scc);
+        } else {
+          // Check for self loops
+          const selfLoop = (adjList.get(nodeId) || []).some(e => e.target.nodeId === nodeId);
+          if (selfLoop) sccs.push(scc);
+        }
+      }
+    };
+
+    for (const node of nodes) {
+      if (!indices.has(node.id)) {
+        strongconnect(node.id);
+      }
+    }
+
+    // Mark edges that belong to a cycle
+    const nodeToScc = new Map<string, Set<string>>();
+    for (const scc of sccs) {
+      for (const nodeId of scc) {
+        nodeToScc.set(nodeId, scc);
+      }
+    }
+
+    for (const edge of edges) {
+      const sourceScc = nodeToScc.get(edge.source.nodeId);
+      const targetScc = nodeToScc.get(edge.target.nodeId);
+      if (sourceScc && sourceScc === targetScc) {
+        edge.isCircular = true;
+      }
+    }
   }
 
   /**

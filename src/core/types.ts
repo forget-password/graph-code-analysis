@@ -123,6 +123,8 @@ export interface GraphEdge {
     };
     /** 依赖类型 */
     type: DependencyType;
+    /** 是否为循环依赖 */
+    isCircular?: boolean;
     /** 连线拐点 */
     vertices?: Array<{ x: number; y: number }>;
 }

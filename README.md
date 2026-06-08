@@ -7,7 +7,8 @@
 - 📁 **文件夹分析**：分析整个项目目录，提取代码结构信息
 - 🔍 **语言支持**：内置支持 TypeScript、JavaScript、Vue 2、Vue 3、React Hooks、React Class 等语言与框架
 - 🏠 **Home 配置**：语言解析规则会生成到用户主目录，无需修改扩展代码即可扩展
-- 🎨 **交互式图谱**：通过可拖拽节点和连接线可视化代码依赖关系
+- 🎨 **交互式图谱**：通过可拖拽节点和连接线可视化代码依赖关系，依赖箭头精确指向引用源
+- 🖱️ **智能悬浮高亮**：鼠标悬浮在节点上时，会自动高亮相关的依赖路径，并淡化无关的节点与连线，完美解决复杂网络下的连线重叠和视觉干扰问题
 - 🔗 **智能跳转**：点击节点可直接跳转到代码定义位置
 - 🔌 **插件化架构**：可扩展设计，便于后续接入更多语言支持
 - ⚡ **性能优化**：支持高效缓存与增量分析
@@ -17,7 +18,9 @@
 ### 安装
 
 1. 从 VSCode Marketplace 安装（即将上线）
-2. 或通过 VSIX 文件安装
+2. 或通过 VSIX 文件安装：
+   - 可以在项目中执行 `pnpm run install:vsix` 自动打包并安装到本地 VS Code
+   - 或者手动将生成的 `.vsix` 拖入 VS Code 的扩展面板
 
 ### 使用方式
 
@@ -47,7 +50,7 @@
   "codeAnalysis.maxDepth": 10,
   "codeAnalysis.languageConfigPath": "",
   "codeAnalysis.theme": "auto",
-  "codeAnalysis.layout": "radial"
+  "codeAnalysis.layout": "elk"
 }
 ```
 
@@ -57,7 +60,7 @@
 - `codeAnalysis.maxDepth`：文件遍历的最大深度
 - `codeAnalysis.languageConfigPath`：可选的自定义语言规则文件路径。留空时默认使用 `~/config/.code-analysis/languages.json`
 - `codeAnalysis.theme`：图谱主题，可选 `light`、`dark` 或 `auto`
-- `codeAnalysis.layout`：默认图谱布局算法，可选 `radial`、`dagre`、`force` 或 `circular`
+- `codeAnalysis.layout`：默认图谱布局算法，可选 `elk`、`dagre`、`force`、`circular` 或 `radial`
 
 ## 🏠 主目录语言配置
 
@@ -125,21 +128,28 @@
 - Node.js v24.3.0
 - pnpm 10.28.0
 
-### 初始化
+### 常用命令
 
 ```bash
-# 克隆仓库
+# 克隆仓库并安装依赖
 git clone <repository-url>
 cd vscode-code-analysis
-
-# 安装依赖
 pnpm install
 
-# 构建扩展
+# 编译扩展和 Webview UI
 pnpm run build
 
-# 开发监听模式
+# 开发监听模式（支持实时刷新）
 pnpm run watch
+
+# 自动生成 VSCode 离线安装包（.vsix）
+pnpm run build:vsix
+
+# 生成安装包并一键安装到本地 VS Code
+pnpm run install:vsix
+
+# 自动升级版本号，打 Git Tag 并生成安装包
+pnpm run release
 ```
 
 ### 测试
