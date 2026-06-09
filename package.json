@@ -2,8 +2,12 @@
   "name": "graph-code-analysis",
   "displayName": "GraphIt: Code Analysis",
   "description": "Visualize code dependencies and relationships with interactive canvas graph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "mlown",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/forget-password/graph-code-analysis.git"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
